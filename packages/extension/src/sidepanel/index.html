@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KiCad Part Finder</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div id="app">
+    <header class="header">
+      <h1>KiCad Part Finder</h1>
+      <div id="serverStatus" class="status-dot disconnected" title="Server disconnected"></div>
+    </header>
+
+    <!-- No part detected -->
+    <div id="emptyState" class="section">
+      <p class="muted">Highlight a part number on any page, or navigate to a DigiKey / LCSC product page.</p>
+    </div>
+
+    <!-- Part detected -->
+    <div id="partInfo" class="section hidden">
+      <div class="part-header">
+        <span id="partSource" class="badge">DigiKey</span>
+        <h2 id="partMpn" class="mpn"></h2>
+      </div>
+      <p id="partManufacturer" class="detail"></p>
+      <p id="partDescription" class="detail muted"></p>
+    </div>
+
+    <!-- EasyEDA results -->
+    <div id="easyedaResults" class="section hidden">
+      <h3>EasyEDA / LCSC Library</h3>
+      <div id="easyedaLoading" class="loading">Searching...</div>
+      <div id="easyedaFiles" class="file-grid hidden">
+        <div class="file-item" id="symbolAvail">
+          <span class="file-icon">📐</span>
+          <span class="file-label">Symbol</span>
+          <span class="file-status">—</span>
+        </div>
+        <div class="file-item" id="footprintAvail">
+          <span class="file-icon">🔲</span>
+          <span class="file-label">Footprint</span>
+          <span class="file-status">—</span>
+        </div>
+        <div class="file-item" id="model3dAvail">
+          <span class="file-icon">📦</span>
+          <span class="file-label">3D Model</span>
+          <span class="file-status">—</span>
+        </div>
+      </div>
+      <button id="installBtn" class="btn-primary hidden" disabled>
+        Install to KiCad
+      </button>
+      <div id="installStatus" class="install-status hidden"></div>
+    </div>
+
+    <!-- LCSC Stock Info -->
+    <div id="stockInfo" class="section hidden">
+      <h3>LCSC / JLCPCB Stock</h3>
+      <div id="stockPrimary" class="stock-primary"></div>
+      <div id="variantList" class="variant-list"></div>
+    </div>
+
+    <!-- Secondary sources -->
+    <div id="secondarySources" class="section hidden">
+      <h3>Also search on</h3>
+      <div id="sourceLinks" class="source-links"></div>
+    </div>
+
+    <!-- ZIP drop zone -->
+    <div class="section">
+      <h3>Import from ZIP</h3>
+      <div id="dropZone" class="drop-zone">
+        <p>Drop a SnapEDA / CSE ZIP here</p>
+        <p class="muted">or click to browse</p>
+        <input type="file" id="fileInput" accept=".zip" hidden />
+      </div>
+      <div id="uploadStatus" class="install-status hidden"></div>
+    </div>
+
+    <!-- Settings -->
+    <div class="section settings">
+      <details>
+        <summary>Settings</summary>
+        <label>
+          Server URL
+          <input id="serverUrl" type="text" value="http://localhost:3456" />
+        </label>
+        <button id="saveSettings" class="btn-small">Save</button>
+      </details>
+    </div>
+  </div>
+
+  <script type="module" src="./sidepanel.ts"></script>
+</body>
+</html>

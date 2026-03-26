@@ -1,0 +1,20 @@
+{
+  "name": "@kicad-part-finder/extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite build --watch --mode development",
+    "build": "vite build",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@kicad-part-finder/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "vite": "^6.0.0",
+    "vitest": "^3.0.0"
+  }
+}

@@ -1,0 +1,405 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-size: 13px;
+  color: #e4e4e7;
+  background: #18181b;
+  min-width: 320px;
+}
+
+#app {
+  padding: 12px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #27272a;
+}
+
+.header h1 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #fafafa;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-dot.connected {
+  background: #22c55e;
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.4);
+}
+
+.status-dot.disconnected {
+  background: #71717a;
+}
+
+.section {
+  margin-bottom: 16px;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.muted {
+  color: #71717a;
+  font-size: 12px;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: #27272a;
+  color: #a1a1aa;
+}
+
+.part-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.mpn {
+  font-size: 16px;
+  font-weight: 700;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  color: #fafafa;
+}
+
+.detail {
+  font-size: 12px;
+  color: #a1a1aa;
+  margin-top: 2px;
+}
+
+h3 {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #71717a;
+  margin-bottom: 8px;
+}
+
+.loading {
+  color: #a1a1aa;
+  font-size: 12px;
+  padding: 8px 0;
+}
+
+.file-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.file-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 4px;
+  background: #27272a;
+  border-radius: 6px;
+  border: 1px solid #3f3f46;
+}
+
+.file-item.available {
+  border-color: #22c55e;
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.file-item.unavailable {
+  opacity: 0.5;
+}
+
+.file-icon {
+  font-size: 18px;
+}
+
+.file-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: #a1a1aa;
+}
+
+.file-status {
+  font-size: 10px;
+  color: #71717a;
+}
+
+.file-item.available .file-status {
+  color: #22c55e;
+}
+
+.btn-primary {
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 6px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary.installing {
+  background: #71717a;
+}
+
+.btn-primary.success {
+  background: #22c55e;
+}
+
+.btn-primary.error {
+  background: #ef4444;
+}
+
+.install-status {
+  font-size: 11px;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: #27272a;
+}
+
+.install-status.success {
+  color: #22c55e;
+}
+
+.install-status.error {
+  color: #ef4444;
+}
+
+.source-links {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.source-link {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 8px;
+  background: #27272a;
+  border-radius: 6px;
+  border: 1px solid #3f3f46;
+  text-decoration: none;
+  color: #e4e4e7;
+  transition: border-color 0.15s;
+}
+
+.source-link:hover {
+  border-color: #71717a;
+}
+
+.source-link-name {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.source-link-desc {
+  font-size: 10px;
+  color: #71717a;
+}
+
+.source-link-arrow {
+  color: #71717a;
+  font-size: 14px;
+}
+
+.stock-primary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: #27272a;
+  border-radius: 6px;
+  border: 1px solid #3f3f46;
+  margin-bottom: 6px;
+}
+
+.stock-count {
+  font-size: 16px;
+  font-weight: 700;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: #fafafa;
+}
+
+.stock-count.in-stock { color: #22c55e; }
+.stock-count.low-stock { color: #f59e0b; }
+.stock-count.no-stock { color: #ef4444; }
+
+.stock-meta {
+  font-size: 11px;
+  color: #71717a;
+}
+
+.stock-meta .stock-price {
+  color: #a1a1aa;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+.stock-meta .stock-package {
+  color: #71717a;
+}
+
+.variant-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.variant-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 8px;
+  background: #27272a;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  font-size: 11px;
+  text-decoration: none;
+  color: #e4e4e7;
+  transition: border-color 0.1s;
+}
+
+.variant-item:hover {
+  border-color: #3f3f46;
+}
+
+.variant-mpn {
+  font-weight: 600;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+}
+
+.variant-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  color: #71717a;
+}
+
+.variant-stock {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: #22c55e;
+}
+
+.variant-price {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: #a1a1aa;
+}
+
+.variant-pkg {
+  color: #52525b;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drop-zone {
+  border: 2px dashed #3f3f46;
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.drop-zone:hover,
+.drop-zone.drag-over {
+  border-color: #2563eb;
+  background: rgba(37, 99, 235, 0.06);
+}
+
+.drop-zone p {
+  margin: 2px 0;
+  font-size: 12px;
+  color: #a1a1aa;
+}
+
+.drop-zone.uploading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.settings {
+  border-top: 1px solid #27272a;
+  padding-top: 12px;
+}
+
+.settings summary {
+  font-size: 11px;
+  color: #71717a;
+  cursor: pointer;
+}
+
+.settings label {
+  display: block;
+  font-size: 11px;
+  color: #a1a1aa;
+  margin-top: 8px;
+}
+
+.settings input {
+  width: 100%;
+  padding: 4px 8px;
+  margin-top: 4px;
+  background: #27272a;
+  border: 1px solid #3f3f46;
+  border-radius: 4px;
+  color: #e4e4e7;
+  font-size: 12px;
+  font-family: 'SF Mono', monospace;
+}
+
+.btn-small {
+  padding: 4px 10px;
+  margin-top: 6px;
+  border: none;
+  border-radius: 4px;
+  background: #3f3f46;
+  color: #e4e4e7;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.btn-small:hover {
+  background: #52525b;
+}

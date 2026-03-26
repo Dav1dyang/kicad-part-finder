@@ -1,0 +1,81 @@
+{
+  "manifest_version": 3,
+  "name": "KiCad Part Finder",
+  "version": "0.1.0",
+  "description": "Find and install KiCad symbols, footprints, and 3D models from DigiKey and LCSC",
+  "permissions": ["activeTab", "sidePanel", "storage", "scripting"],
+  "host_permissions": [
+    "https://www.digikey.com/*",
+    "https://www.digikey.tw/*",
+    "https://www.digikey.co.uk/*",
+    "https://www.digikey.de/*",
+    "https://www.digikey.jp/*",
+    "https://www.digikey.cn/*",
+    "https://www.digikey.com.au/*",
+    "https://www.digikey.ca/*",
+    "https://www.lcsc.com/*",
+    "https://lcsc.com/*",
+    "https://easyeda.com/*",
+    "https://modules.easyeda.com/*",
+    "https://jlcpcb.com/*",
+    "http://localhost:3456/*",
+    "<all_urls>"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.digikey.com/*/products/detail/*",
+        "https://www.digikey.tw/*/products/detail/*",
+        "https://www.digikey.co.uk/*/products/detail/*",
+        "https://www.digikey.de/*/products/detail/*",
+        "https://www.digikey.jp/*/products/detail/*",
+        "https://www.digikey.cn/*/products/detail/*",
+        "https://www.digikey.com.au/*/products/detail/*",
+        "https://www.digikey.ca/*/products/detail/*"
+      ],
+      "js": ["content/digikey.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.lcsc.com/product-detail/*",
+        "https://lcsc.com/product-detail/*"
+      ],
+      "js": ["content/lcsc.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "side_panel": {
+    "default_path": "src/sidepanel/index.html"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+2",
+        "mac": "Command+Shift+2"
+      },
+      "description": "Open KiCad Part Finder"
+    }
+  },
+  "action": {
+    "default_title": "KiCad Part Finder"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/sidepanel/index.html",
+        "sidepanel/sidepanel.js",
+        "sidepanel/sidepanel.css"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
