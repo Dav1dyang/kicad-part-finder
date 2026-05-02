@@ -87,8 +87,21 @@ if [ "$SKIP_PYTHON" = "0" ]; then
     python3 -m venv "$VENV_DIR"
   fi
   info "Installing easyeda2kicad..."
-  "$VENV_DIR/bin/pip" install -q easyeda2kicad
-  ok "easyeda2kicad installed at ${VENV_DIR}/bin/easyeda2kicad"
+  "$VENV_DIR/bin/pip" install -q --upgrade easyeda2kicad
+  CONVERTER_VERSION=$("$VENV_DIR/bin/easyeda2kicad" --version 2>/dev/null | head -1 || echo "unknown")
+  ok "easyeda2kicad ${CONVERTER_VERSION} installed at ${VENV_DIR}/bin/easyeda2kicad"
+
+  # Persist the converter path so the server uses the venv we just provisioned,
+  # rather than auto-detecting some unrelated venv on the user's machine.
+  info "Recording converter path in ~/.kicad-part-finder.json..."
+  node -e '
+    const fs = require("fs"), path = require("path"), os = require("os");
+    const cfg = path.join(os.homedir(), ".kicad-part-finder.json");
+    const cur = fs.existsSync(cfg) ? JSON.parse(fs.readFileSync(cfg, "utf8")) : {};
+    cur.converterPath = process.argv[1];
+    fs.writeFileSync(cfg, JSON.stringify(cur, null, 2));
+  ' "${VENV_DIR}/bin/easyeda2kicad"
+  ok "Server config updated"
 else
   warn "Skipping easyeda2kicad (no Python3)"
 fi
@@ -201,6 +214,8 @@ WATCHDOG
         <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
         <key>HOME</key>
         <string>${HOME}</string>
+        <key>EASYEDA2KICAD_PATH</key>
+        <string>${CONVERTER_PATH}</string>
     </dict>
     <key>SoftResourceLimits</key>
     <dict>

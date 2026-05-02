@@ -67,6 +67,7 @@ export interface HealthResponse {
   version: string;
   kicadDetected: boolean;
   converterAvailable: boolean;
+  converterVersion?: string;
 }
 
 /** Messages between content script and extension */

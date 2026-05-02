@@ -4,16 +4,34 @@
 
 import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join } from 'path';
+import { dirname, join, resolve } from 'path';
+import { fileURLToPath } from 'url';
 import { homedir } from 'os';
 import type { ServerConfig } from '@kicad-part-finder/shared';
 import { DEFAULT_PORT, LIBRARY_NAME } from '@kicad-part-finder/shared';
 
 const CONFIG_PATH = join(homedir(), '.kicad-part-finder.json');
 
-/** Find easyeda2kicad in common locations */
+/** Resolve the project root from the running file path. Returns null if it can't be located. */
+function findProjectVenv(): string | null {
+  try {
+    const here = fileURLToPath(import.meta.url);
+    // src/lib/config-store.ts or dist/lib/config-store.js → project root is 4 levels up
+    // (lib → src|dist → server → packages → project root).
+    const projectRoot = resolve(dirname(here), '..', '..', '..', '..');
+    const candidate = join(projectRoot, '.venv', 'bin', 'easyeda2kicad');
+    return existsSync(candidate) ? candidate : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Find easyeda2kicad in common locations. Order matters: env var > project venv > home venvs > PATH. */
 function findConverterPath(): string {
   if (process.env.EASYEDA2KICAD_PATH) return process.env.EASYEDA2KICAD_PATH;
+
+  const projectVenv = findProjectVenv();
+  if (projectVenv) return projectVenv;
 
   const home = homedir();
   const candidates = [
