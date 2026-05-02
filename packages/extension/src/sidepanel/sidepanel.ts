@@ -97,8 +97,14 @@ async function init() {
 async function updateServerStatus() {
   const health = await checkHealth();
   if (health?.ok) {
-    serverStatus.className = 'status-dot connected';
-    serverStatus.title = `Server v${health.version} — KiCad ${health.kicadDetected ? 'detected' : 'not found'}`;
+    const kicad = health.kicadDetected ? 'detected' : 'not found';
+    const converter = health.converterAvailable
+      ? `easyeda2kicad ${health.converterVersion ? `v${health.converterVersion}` : 'available'}`
+      : 'easyeda2kicad missing';
+    serverStatus.className = health.converterAvailable
+      ? 'status-dot connected'
+      : 'status-dot warning';
+    serverStatus.title = `Server v${health.version} — KiCad ${kicad} — ${converter}`;
   } else {
     serverStatus.className = 'status-dot disconnected';
     serverStatus.title = 'Server disconnected — run: npx kicad-part-server';

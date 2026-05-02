@@ -14,10 +14,11 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { readdir, readFile } from 'fs/promises';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { mkdtempSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import type { ComponentFile } from '@kicad-part-finder/shared';
+import { preflightEasyeda } from './easyeda-client.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -26,21 +27,53 @@ interface ConverterResult {
   error?: string;
 }
 
-/** Check if easyeda2kicad CLI is available */
-export async function checkConverterAvailable(converterPath: string): Promise<boolean> {
+export interface ConverterStatus {
+  available: boolean;
+  version?: string;
+}
+
+interface ExecError extends Error {
+  stdout?: string;
+  stderr?: string;
+  code?: string | number;
+}
+
+const statusCache = new Map<string, ConverterStatus>();
+
+/** Get converter availability + version. Cached per converterPath for the process lifetime. */
+export async function getConverterStatus(converterPath: string): Promise<ConverterStatus> {
+  const cached = statusCache.get(converterPath);
+  if (cached) return cached;
+
+  let status: ConverterStatus = { available: false };
   try {
-    await execFileAsync(converterPath, ['--help'], { timeout: 5000 });
-    return true;
+    const { stdout } = await execFileAsync(converterPath, ['--version'], { timeout: 5000 });
+    const match = stdout.match(/(\d+\.\d+\.\d+(?:\.\d+)?)/);
+    status = { available: true, version: match?.[1] };
   } catch {
-    return false;
+    // --version may not exist on very old releases; fall back to --help
+    try {
+      await execFileAsync(converterPath, ['--help'], { timeout: 5000 });
+      status = { available: true };
+    } catch {
+      status = { available: false };
+    }
   }
+
+  statusCache.set(converterPath, status);
+  return status;
+}
+
+/** Boolean shim for callers that only need availability. */
+export async function checkConverterAvailable(converterPath: string): Promise<boolean> {
+  return (await getConverterStatus(converterPath)).available;
 }
 
 /** Run easyeda2kicad to fetch and convert a component by LCSC ID */
 export async function runConverter(
   converterPath: string,
   lcscId: string,
-  mpn?: string
+  _mpn?: string,
 ): Promise<ConverterResult> {
   // Validate LCSC ID format: must be 'C' followed by digits only
   if (!/^C\d+$/.test(lcscId)) {
@@ -50,11 +83,28 @@ export async function runConverter(
     };
   }
 
-  const available = await checkConverterAvailable(converterPath);
-  if (!available) {
+  const status = await getConverterStatus(converterPath);
+  if (!status.available) {
     return {
       files: [],
-      error: `easyeda2kicad not found. Install it with: pip install easyeda2kicad`,
+      error: `easyeda2kicad not found at ${converterPath}. Install it with: pip install easyeda2kicad`,
+    };
+  }
+
+  // Pre-flight EasyEDA from Node so we never feed a known-broken state to the Python CLI.
+  // If our healthy Node fetch can't reach the API, the Python CLI's request — which uses
+  // a stale API contract and a different UA — has zero chance.
+  const preflight = await preflightEasyeda(lcscId);
+  if (preflight.status === 'unreachable') {
+    return {
+      files: [],
+      error: `EasyEDA API is unreachable (${preflight.reason}). Try again in a few minutes.`,
+    };
+  }
+  if (preflight.status === 'not_found') {
+    return {
+      files: [],
+      error: `${lcscId} not found in EasyEDA library. Try a SnapEDA ZIP drop instead.`,
     };
   }
 
@@ -63,14 +113,11 @@ export async function runConverter(
 
   try {
     // --output is a base path: creates component.kicad_sym, component.pretty/, component.3dshapes/
-    await execFileAsync(converterPath, [
-      '--full',
-      `--lcsc_id=${lcscId}`,
-      `--output=${outputBase}`,
-    ], {
-      timeout: 60_000,
-      cwd: tempDir,
-    });
+    await execFileAsync(
+      converterPath,
+      ['--full', `--lcsc_id=${lcscId}`, `--output=${outputBase}`],
+      { timeout: 60_000, cwd: tempDir },
+    );
 
     const files: ComponentFile[] = [];
 
@@ -131,7 +178,56 @@ export async function runConverter(
   } catch (err) {
     return {
       files: [],
-      error: `Converter failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+      error: translateConverterError(err, { converterPath, lcscId, version: status.version }),
     };
   }
+}
+
+/**
+ * Map raw CLI failures to a single, actionable message. The full traceback should
+ * be logged on the server; only this short message is returned to the client.
+ */
+function translateConverterError(
+  err: unknown,
+  ctx: { converterPath: string; lcscId: string; version?: string },
+): string {
+  const e = err as ExecError;
+  const stderr = e?.stderr ?? '';
+  const stdout = e?.stdout ?? '';
+  const combined = `${stderr}\n${stdout}`;
+  const versionLabel = ctx.version ? `v${ctx.version}` : 'unknown version';
+  const venvDir = dirname(dirname(ctx.converterPath)); // .../venv/bin/foo -> .../venv
+
+  // The exact traceback we keep seeing: easyeda2kicad's API call returned a non-JSON
+  // body and r.json() blew up. EasyEDA was reachable from the Node pre-flight, so
+  // the CLI itself is the problem — almost always a stale install.
+  if (/JSONDecodeError|Expecting value/.test(combined)) {
+    return (
+      `easyeda2kicad (${versionLabel}) failed to fetch ${ctx.lcscId}, but the EasyEDA API is responding to the server. ` +
+      `Your easyeda2kicad install at ${ctx.converterPath} is probably stale. ` +
+      `Run: ${venvDir}/bin/pip install --upgrade easyeda2kicad`
+    );
+  }
+
+  if (/ModuleNotFoundError|ImportError/.test(combined)) {
+    return (
+      `easyeda2kicad install at ${ctx.converterPath} is broken (missing module). ` +
+      `Run: ${venvDir}/bin/pip install --upgrade --force-reinstall easyeda2kicad`
+    );
+  }
+
+  if (e?.code === 'ETIMEDOUT' || /timed? ?out/i.test(e?.message ?? '')) {
+    return `Conversion timed out after 60s. The EasyEDA API may be slow — try again.`;
+  }
+
+  // Fallback: surface the first non-empty stderr line (without the full traceback).
+  const firstStderrLine = stderr
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l && !l.startsWith('[INFO]'));
+  if (firstStderrLine) {
+    return `easyeda2kicad failed: ${firstStderrLine}`;
+  }
+
+  return `Converter failed: ${e instanceof Error ? e.message : 'Unknown error'}`;
 }

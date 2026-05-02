@@ -4,6 +4,7 @@
  */
 
 import type { FastifyInstance } from 'fastify';
+import { fetchEasyedaComponent } from '../lib/easyeda-client.js';
 
 interface SearchQuery {
   mpn?: string;
@@ -96,7 +97,7 @@ async function searchJlcpcb(mpn: string): Promise<VariantInfo[]> {
     );
     if (!resp.ok) return [];
 
-    const data = await resp.json();
+    const data = (await resp.json()) as { data?: { componentPageInfo?: { list?: unknown } } };
     const list = data?.data?.componentPageInfo?.list;
     if (!Array.isArray(list)) return [];
 
@@ -119,24 +120,3 @@ async function searchJlcpcb(mpn: string): Promise<VariantInfo[]> {
   }
 }
 
-async function fetchEasyedaComponent(lcscId: string) {
-  try {
-    const resp = await fetch(
-      `https://easyeda.com/api/products/${lcscId}/components?version=6.4.19.5`
-    );
-    if (!resp.ok) return null;
-
-    const data = await resp.json();
-    if (!data.success || !data.result) return null;
-
-    const r = data.result;
-    return {
-      title: r.title || '',
-      hasSymbol: !!r.dataStr && typeof r.dataStr === 'object',
-      hasFootprint: !!r.packageDetail?.dataStr && typeof r.packageDetail.dataStr === 'object',
-      has3DModel: !!r.packageDetail,
-    };
-  } catch {
-    return null;
-  }
-}
