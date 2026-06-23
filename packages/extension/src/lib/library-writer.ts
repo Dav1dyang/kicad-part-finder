@@ -60,6 +60,10 @@ export function extractSymbolBlocks(symbolText: string): string {
     for (; i < symbolText.length; i++) {
       const ch = symbolText[i];
       if (inString) {
+        if (ch === '\\') {
+          i++;
+          continue;
+        }
         if (ch === '"') inString = false;
         continue;
       }
@@ -267,6 +271,20 @@ async function idbSet(key: string, value: unknown): Promise<void> {
   }
 }
 
+async function idbDelete(key: string): Promise<void> {
+  const db = await openDb();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).delete(key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+
 /**
  * Prompt the user to pick their KiCad library root folder (read-write) and
  * persist the handle in IndexedDB for next session. Must be called from a user
@@ -311,7 +329,7 @@ export async function getSavedFolder(): Promise<FileSystemDirectoryHandle | null
 
 /** Forget the stored folder handle (used by a "change folder" affordance). */
 export async function clearSavedFolder(): Promise<void> {
-  await idbSet(HANDLE_KEY, undefined);
+  await idbDelete(HANDLE_KEY);
 }
 
 /** Get (creating if missing) a subdirectory handle by path segment. */
@@ -331,8 +349,11 @@ async function readFileText(
     const fileHandle = await dir.getFileHandle(name, { create: false });
     const file = await fileHandle.getFile();
     return await file.text();
-  } catch {
-    return '';
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'NotFoundError') {
+      return '';
+    }
+    throw err;
   }
 }
 
@@ -410,9 +431,9 @@ export async function installPart(
       result.modelStatus = 'skipped (no model uuid)';
     } else {
       try {
-        const resp = await fetch(dl.stepUrl, {
-          headers: { Referer: 'https://easyeda.com/' },
-        });
+        // Referer for modules.easyeda.com is injected by declarativeNetRequest;
+        // fetch() cannot set that forbidden header from extension pages.
+        const resp = await fetch(dl.stepUrl);
         if (!resp.ok) {
           result.modelStatus = `skipped (HTTP ${resp.status})`;
         } else {

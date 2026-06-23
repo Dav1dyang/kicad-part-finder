@@ -116,6 +116,7 @@ const RULES: ReadonlyArray<readonly [keyword: string, bucket: Bucket]> = [
   ['flash', 'IC'],
   ['rtc', 'IC'],
   ['clock', 'IC'],
+  ['crystal resonator', 'Discrete'],
   ['oscillator', 'IC'],
   ['crystal', 'IC'],
   ['transceiver', 'IC'],
@@ -144,7 +145,6 @@ const RULES: ReadonlyArray<readonly [keyword: string, bucket: Bucket]> = [
   ['ferrite', 'Discrete'],
   ['bead', 'Discrete'],
   ['fuse', 'Discrete'],
-  ['crystal resonator', 'Discrete'],
   ['resonator', 'Discrete'],
 
   // --- Mechanical / hardware ---

@@ -49,6 +49,7 @@ describe('categoryToBucket', () => {
   it('classifies a spread of additional common categories', () => {
     expect(categoryToBucket('Voltage Regulators - Linear, LDO')).toBe('Power');
     expect(categoryToBucket('Crystals')).toBe('IC');
+    expect(categoryToBucket('Crystal Resonators')).toBe('Discrete');
     expect(categoryToBucket('Inductors, Coils, Chokes')).toBe('Discrete');
     expect(categoryToBucket('TVS Diodes')).toBe('Discrete');
     expect(categoryToBucket('Pin Headers')).toBe('Connector');

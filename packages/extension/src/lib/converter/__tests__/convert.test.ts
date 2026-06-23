@@ -195,12 +195,30 @@ describe('extractMeta datasheet fallback', () => {
     expect(extractMeta(bare, LCSC_ID).datasheet).toBe(
       `https://www.lcsc.com/datasheet/${LCSC_ID}.pdf`,
     );
+
+    expect(() => convertFromResult({ packageDetail: { dataStr: {} } }, LCSC_ID)).toThrow(
+      /missing schematic dataStr/,
+    );
+    expect(() => convertFromResult({ dataStr: {} }, LCSC_ID)).toThrow(
+      /missing footprint packageDetail\.dataStr/,
+    );
   });
 
   it('prefers the footprint c_para link when present', () => {
     expect(extractMeta(result, LCSC_ID).datasheet).toMatch(/^https?:\/\//);
     // The fixture's footprint c_para carries a TI datasheet link.
     expect(extractMeta(result, LCSC_ID).datasheet).toContain('ti.com');
+
+    const stringDocs: EasyedaResult = {
+      ...result,
+      dataStr: JSON.stringify(result.dataStr),
+      packageDetail: { dataStr: JSON.stringify(result.packageDetail?.dataStr) },
+    };
+    expect(extractMeta(stringDocs, LCSC_ID)).toMatchObject({
+      lcsc: 'C3235557',
+      mpn: 'TPS2116DRLR',
+      package: 'SOT-583-8_L2.1-W1.6-P0.50-LS1.6-BL',
+    });
   });
 });
 

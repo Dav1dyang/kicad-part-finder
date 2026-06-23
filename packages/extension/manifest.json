@@ -3,7 +3,7 @@
   "name": "KiCad Part Finder",
   "version": "0.1.0",
   "description": "Find and install KiCad symbols, footprints, and 3D models from DigiKey and LCSC",
-  "permissions": ["activeTab", "sidePanel", "storage", "scripting"],
+  "permissions": ["activeTab", "sidePanel", "storage", "scripting", "declarativeNetRequest"],
   "host_permissions": [
     "https://www.digikey.com/*",
     "https://www.digikey.tw/*",
@@ -47,6 +47,15 @@
   ],
   "background": {
     "service_worker": "background/service-worker.js"
+  },
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "easyeda_referer",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
   },
   "side_panel": {
     "default_path": "src/sidepanel/index.html"

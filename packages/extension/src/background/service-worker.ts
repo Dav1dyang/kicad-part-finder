@@ -35,27 +35,39 @@ async function isSidePanelSupported(): Promise<boolean> {
 
 // Listen for messages from content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'PART_DETECTED' && sender.tab?.id) {
-    detectedParts.set(sender.tab.id, message.part);
-    // Update badge to indicate a part was found
-    chrome.action.setBadgeText({ text: '1', tabId: sender.tab.id });
-    chrome.action.setBadgeBackgroundColor({ color: '#22c55e', tabId: sender.tab.id });
+  if (!message || typeof message !== 'object') {
+    return false;
   }
 
-  if (message.type === 'NO_PART_FOUND' && sender.tab?.id) {
-    detectedParts.delete(sender.tab.id);
-    chrome.action.setBadgeText({ text: '', tabId: sender.tab.id });
+  if (message.type === 'PART_DETECTED' && typeof sender.tab?.id === 'number') {
+    const tabId = sender.tab.id;
+    detectedParts.set(tabId, message.part);
+    // Update badge to indicate a part was found
+    chrome.action.setBadgeText({ text: '1', tabId });
+    chrome.action.setBadgeBackgroundColor({ color: '#22c55e', tabId });
+    return false;
+  }
+
+  if (message.type === 'NO_PART_FOUND' && typeof sender.tab?.id === 'number') {
+    const tabId = sender.tab.id;
+    detectedParts.delete(tabId);
+    chrome.action.setBadgeText({ text: '', tabId });
+    return false;
   }
 
   // Side panel or floating panel requesting current part info
   if (message.type === 'GET_DETECTED_PART') {
-    chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-      if (tab?.id && detectedParts.has(tab.id)) {
-        sendResponse({ part: detectedParts.get(tab.id) });
-      } else {
-        sendResponse({ part: null });
-      }
-    });
+    chrome.tabs.query({ active: true, currentWindow: true })
+      .then(([tab]) => {
+        if (typeof tab?.id === 'number' && detectedParts.has(tab.id)) {
+          sendResponse({ part: detectedParts.get(tab.id) });
+        } else {
+          sendResponse({ part: null });
+        }
+      })
+      .catch((err: unknown) => {
+        sendResponse({ part: null, error: err instanceof Error ? err.message : String(err) });
+      });
     return true; // Keep channel open for async response
   }
 
@@ -85,7 +97,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // Handle extension icon click (or Cmd+Shift+2)
 chrome.action.onClicked.addListener(async (tab) => {
-  if (!tab.id) return;
+  if (typeof tab.id !== 'number') return;
 
   const supported = await isSidePanelSupported();
 
@@ -113,11 +125,10 @@ async function injectFloatingPanel(tabId: number) {
         target: { tabId },
         files: ['content/floating-panel.js'],
       });
-      setTimeout(async () => {
-        try {
-          await chrome.tabs.sendMessage(tabId, { type: 'SHOW_FLOATING_PANEL' });
-        } catch { /* ignore */ }
-      }, 100);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      try {
+        await chrome.tabs.sendMessage(tabId, { type: 'SHOW_FLOATING_PANEL' });
+      } catch { /* ignore */ }
     } catch (err) {
       console.error('Failed to inject floating panel:', err);
     }
@@ -149,6 +160,6 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === 'complete' && selectionListenerInjected.has(tabId)) {
     selectionListenerInjected.delete(tabId);
-    injectSelectionListener(tabId);
+    void injectSelectionListener(tabId);
   }
 });

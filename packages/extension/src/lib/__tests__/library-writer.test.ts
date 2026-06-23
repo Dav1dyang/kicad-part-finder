@@ -30,6 +30,14 @@ const SYM = (name: string) =>
   `    )\n` +
   `  )`;
 
+const SYM_WITH_ESCAPED_QUOTE = String.raw`(symbol "CAP_020" (in_bom yes) (on_board yes)
+    (property "Reference" "C" (id 0) (at 0 0 0))
+    (property "Value" "0.020\"" (id 1) (at 0 -2.54 0))
+    (symbol "CAP_020_0_1"
+      (rectangle (start -5 5) (end 5 -5))
+    )
+  )`;
+
 describe('extractSymbolName', () => {
   it('reads the first top-level symbol name', () => {
     expect(extractSymbolName(SYM('TPS2116DRLR'))).toBe('TPS2116DRLR');
@@ -50,6 +58,11 @@ describe('extractSymbolBlocks', () => {
     expect(block).not.toContain('kicad_symbol_lib');
     // Balanced parens.
     expect(countChar(block, '(')).toBe(countChar(block, ')'));
+
+    const escapedQuoteBlock = extractSymbolBlocks(LIB(SYM_WITH_ESCAPED_QUOTE));
+    expect(escapedQuoteBlock).toBe(SYM_WITH_ESCAPED_QUOTE);
+    expect(escapedQuoteBlock).toContain(String.raw`(property "Value" "0.020\""`);
+    expect(countChar(escapedQuoteBlock, '(')).toBe(countChar(escapedQuoteBlock, ')'));
   });
 
   it('returns a bare block unchanged (trimmed)', () => {
@@ -95,6 +108,14 @@ describe('mergeSymbolLibrary', () => {
     // Still a single, balanced library.
     expect(occurrences(text, 'kicad_symbol_lib')).toBe(1);
     expect(countChar(text, '(')).toBe(countChar(text, ')'));
+
+    const escaped = mergeSymbolLibrary(existing, LIB(SYM_WITH_ESCAPED_QUOTE));
+    expect(escaped.added).toBe(true);
+    expect(escaped.name).toBe('CAP_020');
+    expect(escaped.text).toContain('(symbol "ALPHA"');
+    expect(escaped.text).toContain('(symbol "CAP_020"');
+    expect(escaped.text).toContain(String.raw`(property "Value" "0.020\""`);
+    expect(countChar(escaped.text, '(')).toBe(countChar(escaped.text, ')'));
   });
 
   it('dedupes: a symbol whose name already exists leaves the file unchanged', () => {

@@ -255,12 +255,22 @@ function showCard(result: ConvertResult, match: JlcMatch | null) {
 }
 
 function updateDatasheetLink() {
-  const url = fieldDatasheet.value.trim();
-  if (/^https?:\/\//.test(url)) {
+  const url = safeHttpUrl(fieldDatasheet.value);
+  if (url) {
     datasheetLink.href = url;
     show(datasheetLink);
   } else {
+    datasheetLink.removeAttribute('href');
     hide(datasheetLink);
+  }
+}
+
+function safeHttpUrl(value: string): string | null {
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null;
+  } catch {
+    return null;
   }
 }
 

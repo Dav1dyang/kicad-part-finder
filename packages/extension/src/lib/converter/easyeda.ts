@@ -22,14 +22,6 @@ import { parseSchematicData } from './schematic-parser';
 /** EasyEDA API version pinned by the upstream API (matches the rest of the repo). */
 const EASYEDA_API_VERSION = '6.4.19.5';
 
-/**
- * A normal desktop-Chrome User-Agent. EasyEDA's CloudFront WAF returns HTTP 403
- * for requests without a browser-like UA + a same-origin Referer, so both
- * headers are mandatory.
- */
-const CHROME_UA =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-
 /** Validates an LCSC part id, e.g. "C3235557". */
 const LCSC_ID_RE = /^C\d+$/;
 
@@ -82,12 +74,33 @@ function firstNonEmpty(...candidates: Array<unknown>): string {
   return '';
 }
 
+/** Parse an EasyEDA document that may arrive as an object or a JSON string. */
+function parseEasyedaDoc(value: unknown): any | null {
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  return value && typeof value === 'object' ? value : null;
+}
+
+function requireEasyedaDoc(value: unknown, label: string, lcscId: string): any {
+  const parsed = parseEasyedaDoc(value);
+  if (!parsed) {
+    throw new Error(`EasyEDA component ${lcscId} is missing ${label}`);
+  }
+  return parsed;
+}
+
 /**
  * Fetch the raw EasyEDA component JSON for an LCSC id and return its `.result`.
  *
- * Sends a Chrome UA + `Referer: https://easyeda.com/` (required — without them
- * CloudFront's WAF replies 403). Uses only `fetch`, so it works in Node 20+ and
- * a browser service worker.
+ * Uses only `fetch`, so it works in Node 20+ and a browser service worker. In
+ * Chrome extension service workers, `User-Agent` and `Referer` are forbidden
+ * request headers and fetch() silently drops them; the required EasyEDA Referer
+ * is injected by the static declarativeNetRequest rule in `rules.json`.
  *
  * @param lcscId LCSC part id, e.g. "C3235557". Must match /^C\d+$/.
  * @returns The parsed `result` object from the EasyEDA response.
@@ -103,9 +116,6 @@ export async function fetchEasyedaComponent(lcscId: string): Promise<EasyedaResu
 
   const resp = await fetch(url, {
     headers: {
-      // Both of the next two headers are required to pass the CloudFront WAF.
-      'User-Agent': CHROME_UA,
-      Referer: 'https://easyeda.com/',
       Accept: 'application/json, text/javascript, */*; q=0.01',
       'Accept-Language': 'en-US,en;q=0.9',
       'X-Requested-With': 'XMLHttpRequest',
@@ -133,8 +143,8 @@ export async function fetchEasyedaComponent(lcscId: string): Promise<EasyedaResu
  * present, otherwise the canonical LCSC datasheet URL.
  */
 export function extractMeta(result: EasyedaResult, lcscId: string): ConvertMeta {
-  const schematicHead = result.dataStr?.head?.c_para ?? {};
-  const footprintHead = result.packageDetail?.dataStr?.head?.c_para ?? {};
+  const schematicHead = parseEasyedaDoc(result.dataStr)?.head?.c_para ?? {};
+  const footprintHead = parseEasyedaDoc(result.packageDetail?.dataStr)?.head?.c_para ?? {};
 
   const lcsc = firstNonEmpty(
     result.lcsc?.number,
@@ -171,8 +181,12 @@ export function extractMeta(result: EasyedaResult, lcscId: string): ConvertMeta 
  */
 export function convertFromResult(result: EasyedaResult, lcscId: string): ConvertResult {
   // Schematic symbol lives in result.dataStr; footprint in packageDetail.dataStr.
-  const schematicData = result.dataStr;
-  const footprintData = result.packageDetail?.dataStr;
+  const schematicData = requireEasyedaDoc(result.dataStr, 'schematic dataStr', lcscId);
+  const footprintData = requireEasyedaDoc(
+    result.packageDetail?.dataStr,
+    'footprint packageDetail.dataStr',
+    lcscId,
+  );
 
   // Metadata is computed first so the symbol exporter can stamp it into the
   // symbol's Value/Footprint/Datasheet/Manufacturer/MPN/LCSC properties.

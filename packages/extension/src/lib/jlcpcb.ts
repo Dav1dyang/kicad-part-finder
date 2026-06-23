@@ -23,6 +23,37 @@ export interface JlcMatch {
 const JLC_ENDPOINT =
   'https://jlcpcb.com/api/overseas-pcb-order/v1/shoppingCart/smtGood/selectSmtComponentList';
 
+function asString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function asNumber(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+function asNumberOrNull(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function lcscIdFromItem(item: Record<string, unknown>): string {
+  const candidates = [
+    asString(item.lcscGoodsUrl).match(/(C\d+)\.html/)?.[1],
+    asString(item.componentCode),
+    asString(item.lcscComponentCode),
+  ];
+  return candidates.find((c) => /^C\d+$/.test(c ?? '')) ?? '';
+}
+
 /**
  * Search JLCPCB for an MPN and return all matches with an LCSC id, best (most
  * in-stock) first. Returns [] on any error or no results.
@@ -51,11 +82,9 @@ export async function resolveMpnToLcsc(mpn: string): Promise<JlcMatch[]> {
   const matches: JlcMatch[] = list
     .map((raw): JlcMatch => {
       const item = raw as Record<string, unknown>;
-      const lcscUrl = (item.lcscGoodsUrl as string) || '';
-      const lcscMatch = lcscUrl.match(/(C\d+)\.html/);
-      const prices = item.componentPrices as
-        | Array<{ productPrice: number; startNumber: number }>
-        | undefined;
+      const lcscUrl = asString(item.lcscGoodsUrl);
+      const lcscId = lcscIdFromItem(item);
+      const prices = Array.isArray(item.componentPrices) ? item.componentPrices : [];
 
       // JLCPCB returns first/second-level category names; join the non-empty ones.
       const category = [
@@ -67,11 +96,13 @@ export async function resolveMpnToLcsc(mpn: string): Promise<JlcMatch[]> {
         .join(' / ');
 
       return {
-        mpn: (item.componentModelEn as string) || '',
-        lcscId: lcscMatch?.[1] || '',
-        package: (item.componentSpecificationEn as string) || '',
-        stock: (item.stockCount as number) || 0,
-        price: prices?.[0]?.productPrice ?? null,
+        mpn: asString(item.componentModelEn),
+        lcscId,
+        package: asString(item.componentSpecificationEn),
+        stock: asNumber(item.stockCount),
+        price: prices.length
+          ? asNumberOrNull((prices[0] as Record<string, unknown>).productPrice)
+          : null,
         category,
         lcscUrl,
       };
