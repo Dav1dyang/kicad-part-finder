@@ -14,7 +14,9 @@
     },
     "condition": {
       "urlFilter": "|https://easyeda.com/",
-      "resourceTypes": ["xmlhttprequest"]
+      "resourceTypes": [
+        "xmlhttprequest"
+      ]
     }
   },
   {
@@ -32,7 +34,34 @@
     },
     "condition": {
       "urlFilter": "|https://modules.easyeda.com/",
-      "resourceTypes": ["xmlhttprequest"]
+      "resourceTypes": [
+        "xmlhttprequest"
+      ]
+    }
+  },
+  {
+    "id": 3,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "Referer",
+          "operation": "set",
+          "value": "https://jlcpcb.com/"
+        },
+        {
+          "header": "Origin",
+          "operation": "set",
+          "value": "https://jlcpcb.com"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "|https://jlcpcb.com/",
+      "resourceTypes": [
+        "xmlhttprequest"
+      ]
     }
   }
 ]
