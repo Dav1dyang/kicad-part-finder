@@ -12,8 +12,18 @@ body {
   min-width: 320px;
 }
 
+/*
+ * Works in two contexts:
+ *  - Side panel (~320-400px wide): content fills the available width.
+ *  - Popup-window fallback (~460px, Arc et al.): the max-width stops the content
+ *    from stretching and centers it as a tidy little app window. The slightly
+ *    larger padding gives the wider window comfortable margins while staying
+ *    uncramped in the narrow side panel.
+ */
 #app {
-  padding: 12px;
+  max-width: 440px;
+  margin: 0 auto;
+  padding: 16px;
 }
 
 .header {

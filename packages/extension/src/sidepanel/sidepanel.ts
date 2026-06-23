@@ -22,6 +22,7 @@ import {
   type InstallPartResult,
 } from '../lib/library-writer.js';
 import { getSecondarySourceLinks } from '../lib/mpn-sources.js';
+import { parseSourceTabId } from './source-tab.js';
 
 // --- DOM ---------------------------------------------------------------------
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -91,8 +92,16 @@ async function init() {
   }
 
   // Pre-fill from a detected part (DigiKey/LCSC content script), if any.
+  //  - Side-panel mode: no `?tab=` → service worker reads the active tab.
+  //  - Popup-window mode: `?tab=<id>` identifies the originating page, since the
+  //    active tab here is the popup window itself.
+  const sourceTabId = parseSourceTabId(location.search);
   try {
-    const resp = await chrome.runtime.sendMessage({ type: 'GET_DETECTED_PART' });
+    const msg =
+      sourceTabId === null
+        ? { type: 'GET_DETECTED_PART' }
+        : { type: 'GET_DETECTED_PART', tabId: sourceTabId };
+    const resp = await chrome.runtime.sendMessage(msg);
     const part = resp?.part as DetectedPart | undefined;
     if (part) {
       searchInput.value = part.lcscId || part.mpn || '';
@@ -101,7 +110,7 @@ async function init() {
     /* no detected part */
   }
 
-  // React to live detections while the panel is open.
+  // React to live detections while the UI is open.
   chrome.runtime.onMessage.addListener((message) => {
     if (message.type === 'PART_DETECTED' && message.part) {
       const part = message.part as DetectedPart;

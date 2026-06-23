@@ -1,7 +1,8 @@
 /**
- * Background service worker — routes messages between content scripts and side panel.
- * Detects sidePanel API support and falls back to floating panel on unsupported browsers.
- * Injects a text selection listener when the panel is active so highlighting text
+ * Background service worker — routes messages between content scripts and the UI.
+ * Detects sidePanel API support; on browsers that lack it (e.g. Arc) it opens the
+ * same side-panel UI in a standalone popup window instead.
+ * Injects a text selection listener when the UI is active so highlighting text
  * on any page triggers a component search.
  */
 
@@ -13,6 +14,12 @@ import { resolveMpnToLcsc, type JlcMatch } from '../lib/jlcpcb.js';
 const detectedParts = new Map<number, DetectedPart>();
 // Track which tabs have the selection listener injected
 const selectionListenerInjected = new Set<number>();
+// Id of the popup-window fallback (Arc et al.), if one is currently open.
+let finderWindowId: number | null = null;
+
+// The side-panel UI document, reused as the popup-window fallback. Loadable via
+// chrome.runtime.getURL — extension pages are always reachable by the extension.
+const SIDEPANEL_PATH = 'src/sidepanel/index.html';
 
 /** Check if chrome.sidePanel actually works (Arc exposes namespace but doesn't implement it) */
 let sidePanelSupported: boolean | null = null;
@@ -55,8 +62,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
-  // Side panel or floating panel requesting current part info
+  // UI requesting current part info.
+  //  - Side-panel mode: no tabId given → use the active tab of the current window.
+  //  - Popup-window mode: the UI passes the originating tab's id (the active tab
+  //    here is the popup itself, so the active-tab lookup would be wrong).
   if (message.type === 'GET_DETECTED_PART') {
+    if (typeof message.tabId === 'number') {
+      const part = detectedParts.get(message.tabId) ?? null;
+      sendResponse({ part });
+      return false; // answered synchronously
+    }
     chrome.tabs.query({ active: true, currentWindow: true })
       .then(([tab]) => {
         if (typeof tab?.id === 'number' && detectedParts.has(tab.id)) {
@@ -105,33 +120,55 @@ chrome.action.onClicked.addListener(async (tab) => {
     try {
       await chrome.sidePanel.open({ tabId: tab.id });
     } catch {
-      await injectFloatingPanel(tab.id);
+      await openFinderWindow(tab.id);
     }
   } else {
-    await injectFloatingPanel(tab.id);
+    await openFinderWindow(tab.id);
   }
 
-  // Inject selection listener on the active tab
+  // Keep injecting the selection listener on the SOURCE tab so highlight-to-search
+  // still works regardless of where the UI is shown.
   await injectSelectionListener(tab.id);
 });
 
-/** Inject the floating panel content script and toggle it */
-async function injectFloatingPanel(tabId: number) {
-  try {
-    await chrome.tabs.sendMessage(tabId, { type: 'TOGGLE_FLOATING_PANEL' });
-  } catch {
+/**
+ * Open the side-panel UI in a standalone popup window (fallback for browsers
+ * without a working chrome.sidePanel, e.g. Arc). The originating tab id is passed
+ * via `?tab=` so the UI can pre-fill the part detected on that page.
+ *
+ * Only one finder window is kept alive: if it's already open we focus it (and
+ * re-point it at the new source tab) rather than spawning duplicates.
+ */
+async function openFinderWindow(sourceTabId: number) {
+  const url = `${chrome.runtime.getURL(SIDEPANEL_PATH)}?tab=${sourceTabId}`;
+
+  if (finderWindowId !== null) {
     try {
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        files: ['content/floating-panel.js'],
-      });
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      try {
-        await chrome.tabs.sendMessage(tabId, { type: 'SHOW_FLOATING_PANEL' });
-      } catch { /* ignore */ }
-    } catch (err) {
-      console.error('Failed to inject floating panel:', err);
+      await chrome.windows.update(finderWindowId, { focused: true });
+      // Re-aim the existing window at the (possibly new) source tab.
+      const [view] = await chrome.tabs.query({ windowId: finderWindowId });
+      if (typeof view?.id === 'number') {
+        await chrome.tabs.update(view.id, { url });
+      }
+      return;
+    } catch {
+      // The tracked window vanished without an onRemoved (shouldn't happen, but
+      // be defensive) — fall through and create a fresh one.
+      finderWindowId = null;
     }
+  }
+
+  try {
+    const win = await chrome.windows.create({
+      type: 'popup',
+      width: 460,
+      height: 760,
+      url,
+      focused: true,
+    });
+    finderWindowId = typeof win?.id === 'number' ? win.id : null;
+  } catch (err) {
+    console.error('Failed to open finder window:', err);
   }
 }
 
@@ -154,6 +191,11 @@ async function injectSelectionListener(tabId: number) {
 chrome.tabs.onRemoved.addListener((tabId) => {
   detectedParts.delete(tabId);
   selectionListenerInjected.delete(tabId);
+});
+
+// Stop tracking the finder popup window once it's closed.
+chrome.windows.onRemoved.addListener((windowId) => {
+  if (windowId === finderWindowId) finderWindowId = null;
 });
 
 // When tab navigates to a new page, re-inject selection listener if it was active

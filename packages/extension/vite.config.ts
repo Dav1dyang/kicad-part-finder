@@ -10,7 +10,6 @@ export default defineConfig({
       input: {
         'content/digikey': resolve(__dirname, 'src/content/digikey.ts'),
         'content/lcsc': resolve(__dirname, 'src/content/lcsc.ts'),
-        'content/floating-panel': resolve(__dirname, 'src/content/floating-panel.ts'),
         'content/selection-listener': resolve(__dirname, 'src/content/selection-listener.ts'),
         'background/service-worker': resolve(__dirname, 'src/background/service-worker.ts'),
         'sidepanel/sidepanel': resolve(__dirname, 'src/sidepanel/index.html'),
