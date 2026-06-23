@@ -296,7 +296,7 @@ async function idbDelete(key: string): Promise<void> {
 export async function pickLibraryFolder(): Promise<FileSystemDirectoryHandle> {
   if (typeof (globalThis as any).showDirectoryPicker !== 'function') {
     throw new Error(
-      'File System Access API unavailable. Use Chrome/Edge 86+ (desktop) over the side panel.',
+      'File System Access API unavailable. Use Chrome/Edge 117+ (desktop) over the side panel.',
     );
   }
   const handle: FileSystemDirectoryHandle = await (globalThis as any).showDirectoryPicker({
