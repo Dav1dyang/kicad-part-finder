@@ -176,22 +176,30 @@ async function runSearch(query: string) {
   let matches: JlcMatch[] = [];
   let relaxed = false;
   let matchedQuery = '';
+  // Precise network/parse outcome from the service worker (http 403, fetch
+  // threw, non-JSON body, …) so a failed search shows the REAL cause instead of
+  // a generic "no match". Defaults cover the worker not answering at all.
+  let diagnostic = 'no response';
   try {
     const resp = await chrome.runtime.sendMessage({ type: 'RESOLVE_MPN', mpn: query });
     if (resp?.ok) {
       matches = resp.matches as JlcMatch[];
       relaxed = Boolean(resp.relaxed);
       matchedQuery = (resp.matchedQuery as string) || '';
+      diagnostic = (resp.diagnostic as string) || 'no diagnostic';
+    } else if (resp?.error) {
+      diagnostic = `worker error: ${resp.error}`;
     }
-  } catch {
-    /* fall through to the no-results path */
+  } catch (err) {
+    diagnostic = `message failed: ${err instanceof Error ? err.message : String(err)}`;
   }
 
-  // Only when even the relaxed fallbacks came back empty do we suggest LCSC#.
+  // Only when even the relaxed fallbacks came back empty do we surface the real
+  // failure and suggest entering the exact LCSC#.
   if (matches.length === 0) {
     setStatus(
       searchStatus,
-      `No LCSC match for "${query}". Try the exact LCSC# (C…) instead.`,
+      `Search failed — JLCPCB ${diagnostic}. Try the exact LCSC# (C…).`,
       'error',
     );
     showSecondarySources(query);

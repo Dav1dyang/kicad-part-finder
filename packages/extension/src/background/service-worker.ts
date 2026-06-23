@@ -101,8 +101,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Reports `matchedQuery`/`relaxed` so the UI can flag fuzzy (non-exact) hits.
   if (message.type === 'RESOLVE_MPN') {
     resolveMpnDetailed(message.mpn)
-      .then(({ matches, matchedQuery, relaxed }) =>
-        sendResponse({ ok: true, matches, matchedQuery, relaxed }),
+      .then(({ matches, matchedQuery, relaxed, diagnostic }) =>
+        sendResponse({ ok: true, matches, matchedQuery, relaxed, diagnostic }),
       )
       .catch((err: unknown) =>
         sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }),

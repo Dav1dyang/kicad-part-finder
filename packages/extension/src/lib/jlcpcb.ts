@@ -93,24 +93,64 @@ export function relaxMpnQuery(q: string): string[] {
   return [...new Set(out)].slice(0, 3);
 }
 
-/** Fetch + normalise one JLCPCB keyword search. Returns [] on any error. */
-async function searchJlc(query: string): Promise<JlcMatch[]> {
-  let data: unknown;
+/**
+ * Outcome of a single JLCPCB keyword search: the normalised matches plus a
+ * short human-readable `diagnostic` describing exactly what happened at the
+ * network/parse layer. The diagnostic is what the UI surfaces when a search
+ * comes back empty, so we stop guessing whether it's anti-bot blocking
+ * (`http 403`), a CORS/network failure (`fetch threw: …`), an HTML challenge
+ * page (`non-JSON body (…)`), or simply no catalog hits (`http 200, 0 results`).
+ */
+interface JlcSearchOutcome {
+  matches: JlcMatch[];
+  diagnostic: string;
+}
+
+/** Fetch + normalise one JLCPCB keyword search. Never throws — failures are
+ * captured in the returned `diagnostic`, and `matches` is [] on any error. */
+async function searchJlc(query: string): Promise<JlcSearchOutcome> {
+  let resp: Response;
   try {
-    const resp = await fetch(JLC_ENDPOINT, {
+    resp = await fetch(JLC_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ keyword: query, pageSize: 15, currentPage: 1 }),
     });
-    if (!resp.ok) return [];
+  } catch (err) {
+    // Network-layer failure (DNS, offline, or — most likely here — the browser
+    // refusing the cross-origin request / anti-bot rejection surfaced as a
+    // generic "Failed to fetch").
+    const reason = err instanceof Error ? err.message : String(err);
+    return { matches: [], diagnostic: `fetch threw: ${reason}` };
+  }
+
+  if (!resp.ok) {
+    // Reached the server but it rejected us (e.g. 403 anti-bot, 5xx).
+    return { matches: [], diagnostic: `http ${resp.status}` };
+  }
+
+  // 200 OK — but the anti-bot layer can still return an HTML challenge page
+  // with a 200, so confirm the body actually parses as JSON.
+  let data: unknown;
+  try {
     data = await resp.json();
   } catch {
-    return [];
+    let snippet = '';
+    try {
+      snippet = (await resp.clone().text()).slice(0, 40);
+    } catch {
+      /* body already consumed / unavailable — leave snippet empty */
+    }
+    return { matches: [], diagnostic: `non-JSON body (${snippet})` };
   }
 
   const list = (data as { data?: { componentPageInfo?: { list?: unknown } } })?.data
     ?.componentPageInfo?.list;
-  if (!Array.isArray(list)) return [];
+  if (!Array.isArray(list)) {
+    // Valid JSON but not the shape we expect (e.g. an error envelope) — treat
+    // as zero results so the UI still nudges toward an exact LCSC#.
+    return { matches: [], diagnostic: `http ${resp.status}, 0 results` };
+  }
 
   const matches: JlcMatch[] = list
     .map((raw): JlcMatch => {
@@ -144,7 +184,7 @@ async function searchJlc(query: string): Promise<JlcMatch[]> {
 
   // Most-in-stock first so the auto-selected candidate is the orderable one.
   matches.sort((a, b) => b.stock - a.stock);
-  return matches;
+  return { matches, diagnostic: `http ${resp.status}, ${matches.length} results` };
 }
 
 /** Result of an MPN lookup, including which query actually produced the hits. */
@@ -154,25 +194,41 @@ export interface MpnResolution {
   matchedQuery: string;
   /** True when `matchedQuery` is a relaxed fallback, not the original input. */
   relaxed: boolean;
+  /**
+   * Short human-readable description of the precise network/parse outcome of the
+   * lookup — for surfacing the REAL failure in the UI instead of a generic "no
+   * match". Reflects the FIRST (original-query) attempt, since that's what the
+   * user typed and the most diagnostic when nothing comes back. Examples:
+   * `"http 200, 1 results"`, `"http 403"`, `"fetch threw: Failed to fetch"`,
+   * `"non-JSON body (<!DOCTYPE html><html lang=\"en\"><he)"`. Empty only for
+   * blank input.
+   */
+  diagnostic: string;
 }
 
 /**
  * Resolve a free-text MPN to candidate LCSC parts, trying the original query then
  * progressively-relaxed fallbacks (see {@link relaxMpnQuery}) until one returns
- * hits. Reports which query matched so callers can flag fuzzy results.
+ * hits. Reports which query matched so callers can flag fuzzy results, plus a
+ * `diagnostic` describing what actually happened on the wire (status / JSON /
+ * results / thrown error) so a failed search can show the real cause.
  */
 export async function resolveMpnDetailed(mpn: string): Promise<MpnResolution> {
   const original = (mpn ?? '').trim();
-  if (!original) return { matches: [], matchedQuery: '', relaxed: false };
+  if (!original) return { matches: [], matchedQuery: '', relaxed: false, diagnostic: '' };
 
   const queries = relaxMpnQuery(original);
-  for (const query of queries) {
-    const matches = await searchJlc(query);
+  // Remember the original (first) query's outcome — it's the most informative
+  // thing to show the user when every query ultimately comes back empty.
+  let firstDiagnostic = '';
+  for (const [i, query] of queries.entries()) {
+    const { matches, diagnostic } = await searchJlc(query);
+    if (i === 0) firstDiagnostic = diagnostic;
     if (matches.length > 0) {
-      return { matches, matchedQuery: query, relaxed: query !== original };
+      return { matches, matchedQuery: query, relaxed: query !== original, diagnostic };
     }
   }
-  return { matches: [], matchedQuery: '', relaxed: false };
+  return { matches: [], matchedQuery: '', relaxed: false, diagnostic: firstDiagnostic };
 }
 
 /**
