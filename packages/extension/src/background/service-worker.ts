@@ -6,6 +6,8 @@
  */
 
 import type { DetectedPart } from '@kicad-part-finder/shared';
+import { convertLcsc } from '../lib/converter/easyeda.js';
+import { resolveMpnToLcsc, type JlcMatch } from '../lib/jlcpcb.js';
 
 // Store the most recently detected part per tab
 const detectedParts = new Map<number, DetectedPart>();
@@ -55,6 +57,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     });
     return true; // Keep channel open for async response
+  }
+
+  // Side panel asking us to fetch + convert an LCSC part (cross-origin fetch
+  // works here thanks to host_permissions). Returns the ConvertResult or error.
+  if (message.type === 'CONVERT') {
+    convertLcsc(message.lcscId)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((err: unknown) =>
+        sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }),
+      );
+    return true; // async
+  }
+
+  // Side panel resolving a free-text MPN to candidate LCSC parts via JLCPCB.
+  if (message.type === 'RESOLVE_MPN') {
+    resolveMpnToLcsc(message.mpn)
+      .then((matches: JlcMatch[]) => sendResponse({ ok: true, matches }))
+      .catch((err: unknown) =>
+        sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }),
+      );
+    return true; // async
   }
 
   return false;

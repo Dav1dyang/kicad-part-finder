@@ -408,3 +408,148 @@ h3 {
 .btn-small:hover {
   background: #52525b;
 }
+
+/* --- M2 no-server UI ------------------------------------------------------ */
+
+.small {
+  font-size: 11px;
+}
+
+code {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 11px;
+  color: #a1a1aa;
+}
+
+.folder-section {
+  padding-bottom: 12px;
+  border-bottom: 1px solid #27272a;
+}
+
+.folder-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.folder-row .btn-small {
+  margin-top: 0;
+}
+
+.folder-name {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+}
+
+.folder-name.folder-set {
+  color: #22c55e;
+}
+
+.folder-hint,
+#folderHint {
+  margin-top: 6px;
+}
+
+.field-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: #a1a1aa;
+  margin-bottom: 4px;
+}
+
+.search-row {
+  display: flex;
+  gap: 6px;
+}
+
+.search-row input {
+  flex: 1;
+}
+
+.search-row .btn-primary {
+  width: auto;
+  white-space: nowrap;
+}
+
+input[type='text'],
+select {
+  width: 100%;
+  padding: 6px 8px;
+  background: #27272a;
+  border: 1px solid #3f3f46;
+  border-radius: 4px;
+  color: #e4e4e7;
+  font-size: 12px;
+  font-family: inherit;
+}
+
+input[type='text']:focus,
+select:focus {
+  outline: none;
+  border-color: #2563eb;
+}
+
+.field {
+  margin-bottom: 10px;
+}
+
+.field input.input-missing {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.req-flag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+}
+
+.datasheet-link {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: #60a5fa;
+  text-decoration: none;
+}
+
+.datasheet-link:hover {
+  text-decoration: underline;
+}
+
+.install-status.loading {
+  color: #a1a1aa;
+}
+
+.written-list {
+  list-style: none;
+  margin-top: 8px;
+  padding: 8px;
+  background: #27272a;
+  border-radius: 4px;
+  border: 1px solid #3f3f46;
+}
+
+.written-list li {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 10px;
+  color: #a1a1aa;
+  padding: 1px 0;
+  word-break: break-all;
+}
+
+.written-list li::before {
+  content: '✓ ';
+  color: #22c55e;
+}

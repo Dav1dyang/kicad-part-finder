@@ -13,13 +13,13 @@
     "https://www.digikey.cn/*",
     "https://www.digikey.com.au/*",
     "https://www.digikey.ca/*",
-    "https://www.lcsc.com/*",
-    "https://lcsc.com/*",
     "https://easyeda.com/*",
     "https://modules.easyeda.com/*",
-    "https://jlcpcb.com/*",
-    "http://localhost:3456/*",
-    "<all_urls>"
+    "https://*.easyeda.com/*",
+    "https://*.lcsc.com/*",
+    "https://lcsc.com/*",
+    "https://*.jlcpcb.com/*",
+    "https://jlcpcb.com/*"
   ],
   "content_scripts": [
     {

@@ -10,38 +10,80 @@
   <div id="app">
     <header class="header">
       <h1>KiCad Part Finder</h1>
-      <div id="serverStatus" class="status-dot disconnected" title="Server disconnected"></div>
     </header>
 
-    <!-- No part detected -->
-    <div id="emptyState" class="section">
-      <p class="muted">Highlight a part number on any page, or navigate to a DigiKey / LCSC product page.</p>
-    </div>
-
-    <!-- Part detected -->
-    <div id="partInfo" class="section hidden">
-      <div class="part-header">
-        <span id="partSource" class="badge">DigiKey</span>
-        <h2 id="partMpn" class="mpn"></h2>
+    <!-- Library folder -->
+    <div class="section folder-section">
+      <div class="folder-row">
+        <button id="chooseFolderBtn" class="btn-small">Choose library folder</button>
+        <span id="folderName" class="folder-name muted">No folder chosen</span>
       </div>
-      <p id="partManufacturer" class="detail"></p>
-      <p id="partDescription" class="detail muted"></p>
+      <p id="folderHint" class="muted small">
+        Pick your KiCad library root (e.g. <code>~/Documents/GitHub/kicad-libraries</code>).
+        Parts are written inside it; KiCad's global tables are never touched.
+      </p>
     </div>
 
-    <!-- EasyEDA results -->
-    <div id="easyedaResults" class="section hidden">
-      <h3>EasyEDA / LCSC Library</h3>
-      <div id="easyedaLoading" class="loading">Searching...</div>
-      <div id="easyedaFiles" class="file-grid hidden">
-        <div class="file-item" id="symbolAvail">
+    <!-- Search -->
+    <div class="section search-section">
+      <label class="field-label" for="searchInput">LCSC&nbsp;# or MPN</label>
+      <div class="search-row">
+        <input id="searchInput" type="text" placeholder="C3235557 or TPS2116DRLR" autocomplete="off" />
+        <button id="searchBtn" class="btn-primary">Search</button>
+      </div>
+      <div id="searchStatus" class="install-status hidden"></div>
+    </div>
+
+    <!-- Candidate picker (when an MPN resolves to multiple LCSC parts) -->
+    <div id="candidateSection" class="section hidden">
+      <label class="field-label" for="candidateSelect">Multiple matches — pick one</label>
+      <select id="candidateSelect"></select>
+    </div>
+
+    <!-- Converted part card -->
+    <div id="partCard" class="section hidden">
+      <div class="part-header">
+        <span id="cardLcsc" class="badge">C—</span>
+        <h2 id="cardMpn" class="mpn"></h2>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="fieldMpn">MPN <span class="req-flag hidden" id="flagMpn">missing</span></label>
+        <input id="fieldMpn" type="text" />
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="fieldManufacturer">Manufacturer</label>
+        <input id="fieldManufacturer" type="text" />
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="fieldPackage">Package</label>
+        <input id="fieldPackage" type="text" />
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="fieldDatasheet">Datasheet <span class="req-flag hidden" id="flagDatasheet">missing</span></label>
+        <input id="fieldDatasheet" type="text" />
+        <a id="datasheetLink" class="datasheet-link hidden" target="_blank" rel="noopener">Open datasheet ↗</a>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="bucketSelect">Library (auto-sorted)</label>
+        <select id="bucketSelect"></select>
+      </div>
+
+      <!-- What will be written -->
+      <div class="file-grid">
+        <div class="file-item available" id="symbolAvail">
           <span class="file-icon">📐</span>
           <span class="file-label">Symbol</span>
-          <span class="file-status">—</span>
+          <span class="file-status">Ready</span>
         </div>
-        <div class="file-item" id="footprintAvail">
+        <div class="file-item available" id="footprintAvail">
           <span class="file-icon">🔲</span>
           <span class="file-label">Footprint</span>
-          <span class="file-status">—</span>
+          <span class="file-status">Ready</span>
         </div>
         <div class="file-item" id="model3dAvail">
           <span class="file-icon">📦</span>
@@ -49,46 +91,16 @@
           <span class="file-status">—</span>
         </div>
       </div>
-      <button id="installBtn" class="btn-primary hidden" disabled>
-        Install to KiCad
-      </button>
-      <div id="installStatus" class="install-status hidden"></div>
-    </div>
 
-    <!-- LCSC Stock Info -->
-    <div id="stockInfo" class="section hidden">
-      <h3>LCSC / JLCPCB Stock</h3>
-      <div id="stockPrimary" class="stock-primary"></div>
-      <div id="variantList" class="variant-list"></div>
+      <button id="installBtn" class="btn-primary" disabled>Install to KiCad</button>
+      <div id="installStatus" class="install-status hidden"></div>
+      <ul id="writtenList" class="written-list hidden"></ul>
     </div>
 
     <!-- Secondary sources -->
     <div id="secondarySources" class="section hidden">
       <h3>Also search on</h3>
       <div id="sourceLinks" class="source-links"></div>
-    </div>
-
-    <!-- ZIP drop zone -->
-    <div class="section">
-      <h3>Import from ZIP</h3>
-      <div id="dropZone" class="drop-zone">
-        <p>Drop a SnapEDA / CSE ZIP here</p>
-        <p class="muted">or click to browse</p>
-        <input type="file" id="fileInput" accept=".zip" hidden />
-      </div>
-      <div id="uploadStatus" class="install-status hidden"></div>
-    </div>
-
-    <!-- Settings -->
-    <div class="section settings">
-      <details>
-        <summary>Settings</summary>
-        <label>
-          Server URL
-          <input id="serverUrl" type="text" value="http://localhost:3456" />
-        </label>
-        <button id="saveSettings" class="btn-small">Save</button>
-      </details>
     </div>
   </div>
 
