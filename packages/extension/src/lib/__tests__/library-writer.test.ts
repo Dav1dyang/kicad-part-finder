@@ -180,18 +180,32 @@ describe('setFootprintModel', () => {
 });
 
 describe('resolveModelDownload', () => {
-  it('extracts the uuid and builds a STEP url + .step filename', () => {
+  // Stand-in deployed Worker relay origin; the STEP is fetched through it now.
+  const RELAY = 'https://kicad-part-relay.example.workers.dev';
+
+  it('extracts the uuid and builds a relay STEP url + .step filename', () => {
     const url = 'https://easyeda.com/api/v2/components/7de5db90ab974d88b4eb22e148e2ee81/3d';
-    const dl = resolveModelDownload(url);
+    const dl = resolveModelDownload(url, RELAY);
     expect(dl).not.toBeNull();
     expect(dl!.uuid).toBe('7de5db90ab974d88b4eb22e148e2ee81');
     expect(dl!.fileName).toBe('7de5db90ab974d88b4eb22e148e2ee81.step');
+    // The URL now points at the relay (which fetches modules.easyeda.com
+    // server-side), not directly at the WAF-blocked EasyEDA module store.
     expect(dl!.stepUrl).toBe(
-      'https://modules.easyeda.com/qAxj6KHrDKw4blvCG8QJPs7Y/7de5db90ab974d88b4eb22e148e2ee81',
+      `${RELAY}/easyeda/model?uuid=7de5db90ab974d88b4eb22e148e2ee81`,
     );
   });
+
+  it('trims a trailing slash on the relay base', () => {
+    const url = 'https://easyeda.com/api/v2/components/7de5db90ab974d88b4eb22e148e2ee81/3d';
+    const dl = resolveModelDownload(url, `${RELAY}/`);
+    expect(dl!.stepUrl).toBe(
+      `${RELAY}/easyeda/model?uuid=7de5db90ab974d88b4eb22e148e2ee81`,
+    );
+  });
+
   it('returns null when there is no 32-hex uuid', () => {
-    expect(resolveModelDownload('https://example.com/no-uuid-here')).toBeNull();
+    expect(resolveModelDownload('https://example.com/no-uuid-here', RELAY)).toBeNull();
   });
 });
 

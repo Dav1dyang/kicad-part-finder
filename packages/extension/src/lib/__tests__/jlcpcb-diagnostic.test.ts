@@ -4,10 +4,16 @@
  * global `fetch` (the only external dependency of `searchJlc`) to drive each
  * branch deterministically; no real network is touched.
  *
+ * The lookup now routes through the Cloudflare Worker relay, so calls pass a
+ * `RELAY` base and the success case asserts the GET hits `${RELAY}/jlcpcb/search`.
+ *
  * Companion to jlcpcb-query.test.ts (which covers the pure query relaxation).
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { resolveMpnDetailed, resolveMpnToLcsc } from '../jlcpcb';
+
+/** Stand-in deployed Worker relay origin (no trailing slash). */
+const RELAY = 'https://kicad-part-relay.example.workers.dev';
 
 /** Build a minimal JLCPCB success envelope with `n` usable list items. */
 function jlcEnvelope(n: number) {
@@ -48,17 +54,21 @@ afterEach(() => {
 
 describe('resolveMpnDetailed diagnostic', () => {
   it('reports "http 200, N results" and returns matches on success', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => fakeResponse({ ok: true, status: 200, json: () => jlcEnvelope(1) })),
+    const fetchSpy = vi.fn(async () =>
+      fakeResponse({ ok: true, status: 200, json: () => jlcEnvelope(1) }),
     );
+    vi.stubGlobal('fetch', fetchSpy);
 
-    const res = await resolveMpnDetailed('TPS2116DRLR');
+    const res = await resolveMpnDetailed('TPS2116DRLR', RELAY);
     expect(res.matches).toHaveLength(1);
     expect(res.matches[0].lcscId).toBe('C3235557');
     expect(res.diagnostic).toBe('http 200, 1 results');
     expect(res.relaxed).toBe(false);
     expect(res.matchedQuery).toBe('TPS2116DRLR');
+
+    // The lookup GETs the relay's search endpoint (not JLCPCB directly).
+    const url = String(fetchSpy.mock.calls[0]?.[0]);
+    expect(url).toBe(`${RELAY}/jlcpcb/search?keyword=TPS2116DRLR`);
   });
 
   it('reports "http 403" when the anti-bot layer rejects the request', async () => {
@@ -67,7 +77,7 @@ describe('resolveMpnDetailed diagnostic', () => {
       vi.fn(async () => fakeResponse({ ok: false, status: 403 })),
     );
 
-    const res = await resolveMpnDetailed('TPS2116DRLR');
+    const res = await resolveMpnDetailed('TPS2116DRLR', RELAY);
     expect(res.matches).toHaveLength(0);
     expect(res.diagnostic).toBe('http 403');
   });
@@ -80,7 +90,7 @@ describe('resolveMpnDetailed diagnostic', () => {
       }),
     );
 
-    const res = await resolveMpnDetailed('TPS2116DRLR');
+    const res = await resolveMpnDetailed('TPS2116DRLR', RELAY);
     expect(res.matches).toHaveLength(0);
     expect(res.diagnostic).toBe('fetch threw: Failed to fetch');
   });
@@ -101,7 +111,7 @@ describe('resolveMpnDetailed diagnostic', () => {
       ),
     );
 
-    const res = await resolveMpnDetailed('TPS2116DRLR');
+    const res = await resolveMpnDetailed('TPS2116DRLR', RELAY);
     expect(res.matches).toHaveLength(0);
     expect(res.diagnostic).toBe(`non-JSON body (${html.slice(0, 40)})`);
   });
@@ -113,7 +123,7 @@ describe('resolveMpnDetailed diagnostic', () => {
     );
 
     // 'NE555' does not relax, so there's exactly one query attempt.
-    const res = await resolveMpnDetailed('NE555');
+    const res = await resolveMpnDetailed('NE555', RELAY);
     expect(res.matches).toHaveLength(0);
     expect(res.diagnostic).toBe('http 200, 0 results');
   });
@@ -125,7 +135,7 @@ describe('resolveMpnDetailed diagnostic', () => {
       vi.fn(async () => fakeResponse({ ok: false, status: 403 })),
     );
 
-    const res = await resolveMpnDetailed('TPS2116A'); // relaxes to TPS2116
+    const res = await resolveMpnDetailed('TPS2116A', RELAY); // relaxes to TPS2116
     expect(res.matches).toHaveLength(0);
     expect(res.diagnostic).toBe('http 403');
   });
@@ -134,7 +144,7 @@ describe('resolveMpnDetailed diagnostic', () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
 
-    const res = await resolveMpnDetailed('   ');
+    const res = await resolveMpnDetailed('   ', RELAY);
     expect(res.matches).toHaveLength(0);
     expect(res.diagnostic).toBe('');
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -146,7 +156,7 @@ describe('resolveMpnDetailed diagnostic', () => {
       vi.fn(async () => fakeResponse({ ok: true, status: 200, json: () => jlcEnvelope(2) })),
     );
 
-    const matches = await resolveMpnToLcsc('TPS2116DRLR');
+    const matches = await resolveMpnToLcsc('TPS2116DRLR', RELAY);
     expect(Array.isArray(matches)).toBe(true);
     expect(matches).toHaveLength(2);
   });

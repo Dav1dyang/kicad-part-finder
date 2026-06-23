@@ -94,31 +94,41 @@ function requireEasyedaDoc(value: unknown, label: string, lcscId: string): any {
   return parsed;
 }
 
+/** Trim a trailing slash so `${relayBase}/path` never doubles up. */
+function trimTrailingSlash(base: string): string {
+  return base.replace(/\/+$/, '');
+}
+
 /**
  * Fetch the raw EasyEDA component JSON for an LCSC id and return its `.result`.
  *
- * Uses only `fetch`, so it works in Node 20+ and a browser service worker. In
- * Chrome extension service workers, `User-Agent` and `Referer` are forbidden
- * request headers and fetch() silently drops them; the required EasyEDA Referer
- * is injected by the static declarativeNetRequest rule in `rules.json`.
+ * Routes through the user's deployed Cloudflare Worker relay rather than calling
+ * EasyEDA directly: the browser gets HTTP 403 from EasyEDA's WAF even with
+ * spoofed headers, but the Worker fetches server-side (200) and returns the JSON
+ * verbatim with permissive CORS. Uses only `fetch`, so it works in Node 20+ and
+ * a browser service worker.
  *
- * @param lcscId LCSC part id, e.g. "C3235557". Must match /^C\d+$/.
+ * @param lcscId    LCSC part id, e.g. "C3235557". Must match /^C\d+$/.
+ * @param relayBase deployed Worker origin (e.g. `https://x.workers.dev`); the
+ *   component is fetched from `${relayBase}/easyeda/component?lcsc=...`.
  * @returns The parsed `result` object from the EasyEDA response.
  * @throws If the id is malformed, the HTTP request fails, or the payload has no
  *   successful `result`.
  */
-export async function fetchEasyedaComponent(lcscId: string): Promise<EasyedaResult> {
+export async function fetchEasyedaComponent(
+  lcscId: string,
+  relayBase: string,
+): Promise<EasyedaResult> {
   if (!LCSC_ID_RE.test(lcscId)) {
     throw new Error(`Invalid LCSC id: "${lcscId}" (expected format like "C3235557")`);
   }
 
-  const url = `https://easyeda.com/api/products/${lcscId}/components?version=${EASYEDA_API_VERSION}`;
+  const url = `${trimTrailingSlash(relayBase)}/easyeda/component?lcsc=${encodeURIComponent(lcscId)}`;
 
   const resp = await fetch(url, {
     headers: {
       Accept: 'application/json, text/javascript, */*; q=0.01',
       'Accept-Language': 'en-US,en;q=0.9',
-      'X-Requested-With': 'XMLHttpRequest',
     },
   });
 
@@ -223,16 +233,18 @@ export function convertFromResult(result: EasyedaResult, lcscId: string): Conver
 }
 
 /**
- * Fetch a component from EasyEDA by LCSC id and convert it to KiCad text.
+ * Fetch a component from EasyEDA (via the relay) by LCSC id and convert it to
+ * KiCad text.
  *
  * Public entry point for the convert core. Pure `fetch` + pure JS, so it runs in
  * Node 20+ and a Manifest V3 service worker alike.
  *
- * @param lcscId LCSC part id, e.g. "C3235557". Must match /^C\d+$/.
+ * @param lcscId    LCSC part id, e.g. "C3235557". Must match /^C\d+$/.
+ * @param relayBase deployed Worker origin (e.g. `https://x.workers.dev`).
  * @returns `{ symbol, footprint, model3dUrl, meta }` — see {@link ConvertResult}.
  * @throws Propagates errors from {@link fetchEasyedaComponent}.
  */
-export async function convertLcsc(lcscId: string): Promise<ConvertResult> {
-  const result = await fetchEasyedaComponent(lcscId);
+export async function convertLcsc(lcscId: string, relayBase: string): Promise<ConvertResult> {
+  const result = await fetchEasyedaComponent(lcscId, relayBase);
   return convertFromResult(result, lcscId);
 }

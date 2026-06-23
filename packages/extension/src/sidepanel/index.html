@@ -22,6 +22,18 @@
         Pick your KiCad library root (e.g. <code>~/Documents/GitHub/kicad-libraries</code>).
         Parts are written inside it; KiCad's global tables are never touched.
       </p>
+
+      <!-- Relay URL (the deployed Cloudflare Worker that proxies JLCPCB/EasyEDA) -->
+      <label class="field-label relay-label" for="relayUrlInput">Relay URL</label>
+      <input id="relayUrlInput" type="text" placeholder="https://kicad-part-relay.<you>.workers.dev" autocomplete="off" spellcheck="false" />
+      <p id="relayHint" class="muted small">
+        Paste your deployed Worker URL (…workers.dev) — see <code>packages/relay/README</code>.
+      </p>
+    </div>
+
+    <!-- Relay-not-set banner: search/convert is impossible without the relay -->
+    <div id="relayBanner" class="banner hidden">
+      Set your Relay URL to search/convert (deploy <code>packages/relay</code>).
     </div>
 
     <!-- Search -->

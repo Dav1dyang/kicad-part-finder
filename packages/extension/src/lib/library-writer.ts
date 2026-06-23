@@ -197,15 +197,27 @@ export function setFootprintModel(footprintText: string, fileName: string): stri
   return `${before}\n${modelBlock}\n${after}`;
 }
 
+/** Trim a trailing slash so `${relayBase}/path` never doubles up. */
+function trimTrailingSlash(base: string): string {
+  return base.replace(/\/+$/, '');
+}
+
 /**
  * Decide the on-disk 3D-model filename + a fetchable STEP URL from a converter
  * `model3dUrl` (shape: `https://easyeda.com/api/v2/components/<uuid>/3d`).
  *
- * KiCad accepts STEP, so we target the upstream STEP endpoint and skip OBJ→WRL.
- * Returns null if the uuid can't be extracted.
+ * The STEP itself is fetched through the user's deployed Worker relay
+ * (`${relayBase}/easyeda/model?uuid=<uuid>`): the browser gets HTTP 403 from
+ * EasyEDA's module store even with spoofed headers, but the Worker streams the
+ * bytes back server-side with permissive CORS. KiCad accepts STEP, so we skip
+ * OBJ->WRL. Returns null if the uuid can't be extracted.
+ *
+ * @param model3dUrl the converter's `model3dUrl` carrying the 32-hex uuid.
+ * @param relayBase  deployed Worker origin (e.g. `https://x.workers.dev`).
  */
 export function resolveModelDownload(
   model3dUrl: string,
+  relayBase: string,
 ): { fileName: string; stepUrl: string; uuid: string } | null {
   // The uuid is a 32-hex token somewhere in the URL.
   const m = model3dUrl.match(/([0-9a-fA-F]{32})/);
@@ -214,9 +226,9 @@ export function resolveModelDownload(
   return {
     uuid,
     fileName: `${uuid}.step`,
-    // STEP endpoint (per upstream easyeda2kicad). The OBJ endpoint
-    // (modules.easyeda.com/3dmodel/<uuid>) is intentionally not used.
-    stepUrl: `https://modules.easyeda.com/qAxj6KHrDKw4blvCG8QJPs7Y/${uuid}`,
+    // Relay endpoint; the Worker fetches the upstream STEP store
+    // (modules.easyeda.com/qAxj6KHrDKw4blvCG8QJPs7Y/<uuid>) server-side.
+    stepUrl: `${trimTrailingSlash(relayBase)}/easyeda/model?uuid=${encodeURIComponent(uuid)}`,
   };
 }
 
@@ -402,10 +414,16 @@ export interface InstallPartResult {
  *
  * The 3D model is best-effort: if the fetch fails the footprint is still written
  * (without a model line) and `modelStatus` explains the skip.
+ *
+ * @param root      the granted KiCad library root directory handle.
+ * @param input     the converted part (symbol/footprint/model3dUrl/meta).
+ * @param relayBase deployed Worker origin used to fetch the STEP model (e.g.
+ *   `https://x.workers.dev`).
  */
 export async function installPart(
   root: FileSystemDirectoryHandle,
   input: InstallPartInput,
+  relayBase: string,
 ): Promise<InstallPartResult> {
   const result: InstallPartResult = {
     ok: false,
@@ -426,13 +444,13 @@ export async function installPart(
 
   // --- 3D model (best-effort, before the footprint is written) ---------------
   if (input.model3dUrl) {
-    const dl = resolveModelDownload(input.model3dUrl);
+    const dl = resolveModelDownload(input.model3dUrl, relayBase);
     if (!dl) {
       result.modelStatus = 'skipped (no model uuid)';
     } else {
       try {
-        // Referer for modules.easyeda.com is injected by declarativeNetRequest;
-        // fetch() cannot set that forbidden header from extension pages.
+        // Fetch the STEP through the relay; the Worker streams the bytes back
+        // from EasyEDA's module store server-side (the browser is WAF-blocked).
         const resp = await fetch(dl.stepUrl);
         if (!resp.ok) {
           result.modelStatus = `skipped (HTTP ${resp.status})`;

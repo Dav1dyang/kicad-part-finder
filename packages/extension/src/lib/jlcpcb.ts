@@ -2,10 +2,16 @@
  * Minimal JLCPCB search client — resolves a free-text MPN to candidate LCSC
  * parts (with package, stock, price, and category text for auto-sort).
  *
- * Ported from the retired companion server's `/search` route. Uses only `fetch`,
- * so it runs in a Manifest V3 service worker (jlcpcb.com is in host_permissions,
- * which sidesteps CORS). When the user already has an LCSC id, the side panel can
- * skip this entirely and convert directly.
+ * Routes through the user's deployed Cloudflare Worker relay (`relayBase`)
+ * rather than calling JLCPCB directly: the browser gets HTTP 403 from JLCPCB's
+ * WAF even with spoofed headers, but the Worker fetches server-side (200) and
+ * returns the JSON verbatim with permissive CORS. Uses only `fetch`, so it runs
+ * in a Manifest V3 service worker. When the user already has an LCSC id, the
+ * side panel can skip this entirely and convert directly.
+ *
+ * `relayBase` is the Worker origin (e.g.
+ * `https://kicad-part-relay.foo.workers.dev`, no trailing slash); the search
+ * hits `${relayBase}/jlcpcb/search?keyword=...`.
  */
 
 /** A single JLCPCB search hit, normalised. */
@@ -20,8 +26,10 @@ export interface JlcMatch {
   lcscUrl: string;
 }
 
-const JLC_ENDPOINT =
-  'https://jlcpcb.com/api/overseas-pcb-order/v1/shoppingCart/smtGood/selectSmtComponentList';
+/** Trim a trailing slash so `${relayBase}/path` never doubles up. */
+function trimTrailingSlash(base: string): string {
+  return base.replace(/\/+$/, '');
+}
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : '';
@@ -106,26 +114,28 @@ interface JlcSearchOutcome {
   diagnostic: string;
 }
 
-/** Fetch + normalise one JLCPCB keyword search. Never throws — failures are
- * captured in the returned `diagnostic`, and `matches` is [] on any error. */
-async function searchJlc(query: string): Promise<JlcSearchOutcome> {
+/** Fetch + normalise one JLCPCB keyword search via the relay. Never throws —
+ * failures are captured in the returned `diagnostic`, and `matches` is [] on any
+ * error. `relayBase` is the deployed Worker origin (no trailing slash). */
+async function searchJlc(query: string, relayBase: string): Promise<JlcSearchOutcome> {
+  const endpoint = `${trimTrailingSlash(relayBase)}/jlcpcb/search?keyword=${encodeURIComponent(query)}`;
+
   let resp: Response;
   try {
-    resp = await fetch(JLC_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keyword: query, pageSize: 15, currentPage: 1 }),
-    });
+    // GET the relay; the Worker does the real (server-side) JLCPCB POST and
+    // returns the body verbatim with permissive CORS.
+    resp = await fetch(endpoint);
   } catch (err) {
-    // Network-layer failure (DNS, offline, or — most likely here — the browser
-    // refusing the cross-origin request / anti-bot rejection surfaced as a
-    // generic "Failed to fetch").
+    // Network-layer failure: relay unreachable / wrong URL / offline (surfaced
+    // as a generic "Failed to fetch").
     const reason = err instanceof Error ? err.message : String(err);
     return { matches: [], diagnostic: `fetch threw: ${reason}` };
   }
 
   if (!resp.ok) {
-    // Reached the server but it rejected us (e.g. 403 anti-bot, 5xx).
+    // The relay reached JLCPCB but it (or the relay) rejected us. The relay
+    // mirrors the upstream status (e.g. 403 anti-bot, 5xx) and returns an
+    // `{error,status}` envelope, so `http <status>` still pinpoints the cause.
     return { matches: [], diagnostic: `http ${resp.status}` };
   }
 
@@ -207,13 +217,20 @@ export interface MpnResolution {
 }
 
 /**
- * Resolve a free-text MPN to candidate LCSC parts, trying the original query then
- * progressively-relaxed fallbacks (see {@link relaxMpnQuery}) until one returns
- * hits. Reports which query matched so callers can flag fuzzy results, plus a
- * `diagnostic` describing what actually happened on the wire (status / JSON /
- * results / thrown error) so a failed search can show the real cause.
+ * Resolve a free-text MPN to candidate LCSC parts via the relay, trying the
+ * original query then progressively-relaxed fallbacks (see {@link relaxMpnQuery})
+ * until one returns hits. Reports which query matched so callers can flag fuzzy
+ * results, plus a `diagnostic` describing what actually happened on the wire
+ * (status / JSON / results / thrown error) so a failed search can show the real
+ * cause.
+ *
+ * @param mpn       free-text manufacturer part number (or LCSC id).
+ * @param relayBase deployed Worker origin (e.g. `https://x.workers.dev`).
  */
-export async function resolveMpnDetailed(mpn: string): Promise<MpnResolution> {
+export async function resolveMpnDetailed(
+  mpn: string,
+  relayBase: string,
+): Promise<MpnResolution> {
   const original = (mpn ?? '').trim();
   if (!original) return { matches: [], matchedQuery: '', relaxed: false, diagnostic: '' };
 
@@ -222,7 +239,7 @@ export async function resolveMpnDetailed(mpn: string): Promise<MpnResolution> {
   // thing to show the user when every query ultimately comes back empty.
   let firstDiagnostic = '';
   for (const [i, query] of queries.entries()) {
-    const { matches, diagnostic } = await searchJlc(query);
+    const { matches, diagnostic } = await searchJlc(query, relayBase);
     if (i === 0) firstDiagnostic = diagnostic;
     if (matches.length > 0) {
       return { matches, matchedQuery: query, relaxed: query !== original, diagnostic };
@@ -232,10 +249,10 @@ export async function resolveMpnDetailed(mpn: string): Promise<MpnResolution> {
 }
 
 /**
- * Search JLCPCB for an MPN and return all matches with an LCSC id, best (most
- * in-stock) first. Tries relaxed fallbacks for near-miss MPNs. Returns [] on any
- * error or no results.
+ * Search JLCPCB (via the relay) for an MPN and return all matches with an LCSC
+ * id, best (most in-stock) first. Tries relaxed fallbacks for near-miss MPNs.
+ * Returns [] on any error or no results.
  */
-export async function resolveMpnToLcsc(mpn: string): Promise<JlcMatch[]> {
-  return (await resolveMpnDetailed(mpn)).matches;
+export async function resolveMpnToLcsc(mpn: string, relayBase: string): Promise<JlcMatch[]> {
+  return (await resolveMpnDetailed(mpn, relayBase)).matches;
 }

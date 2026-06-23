@@ -21,6 +21,24 @@ let finderWindowId: number | null = null;
 // chrome.runtime.getURL — extension pages are always reachable by the extension.
 const SIDEPANEL_PATH = 'src/sidepanel/index.html';
 
+/**
+ * Read the user's deployed Worker relay URL from chrome.storage.local. The
+ * extension can't reach JLCPCB/EasyEDA directly (WAF 403), so every convert /
+ * MPN lookup is routed through this relay. Returns '' when unset; callers must
+ * surface a "relay URL not set" error in that case.
+ */
+async function getRelayUrl(): Promise<string> {
+  try {
+    const { relayUrl } = await chrome.storage.local.get('relayUrl');
+    return typeof relayUrl === 'string' ? relayUrl.trim() : '';
+  } catch {
+    return '';
+  }
+}
+
+/** Error string the panel surfaces when no relay URL is configured. */
+const NO_RELAY_ERROR = 'relay URL not set';
+
 /** Check if chrome.sidePanel actually works (Arc exposes namespace but doesn't implement it) */
 let sidePanelSupported: boolean | null = null;
 async function isSidePanelSupported(): Promise<boolean> {
@@ -86,27 +104,46 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // Keep channel open for async response
   }
 
-  // Side panel asking us to fetch + convert an LCSC part (cross-origin fetch
-  // works here thanks to host_permissions). Returns the ConvertResult or error.
+  // Side panel asking us to fetch + convert an LCSC part. The fetch goes through
+  // the user's deployed Worker relay (EasyEDA WAF-blocks the browser directly).
+  // Returns the ConvertResult or an error the panel surfaces.
   if (message.type === 'CONVERT') {
-    convertLcsc(message.lcscId)
-      .then((result) => sendResponse({ ok: true, result }))
-      .catch((err: unknown) =>
-        sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }),
-      );
+    void (async () => {
+      const relayBase = await getRelayUrl();
+      if (!relayBase) {
+        sendResponse({ ok: false, error: NO_RELAY_ERROR });
+        return;
+      }
+      try {
+        const result = await convertLcsc(message.lcscId, relayBase);
+        sendResponse({ ok: true, result });
+      } catch (err: unknown) {
+        sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    })();
     return true; // async
   }
 
-  // Side panel resolving a free-text MPN to candidate LCSC parts via JLCPCB.
-  // Reports `matchedQuery`/`relaxed` so the UI can flag fuzzy (non-exact) hits.
+  // Side panel resolving a free-text MPN to candidate LCSC parts via JLCPCB
+  // (through the relay). Reports `matchedQuery`/`relaxed` so the UI can flag
+  // fuzzy (non-exact) hits.
   if (message.type === 'RESOLVE_MPN') {
-    resolveMpnDetailed(message.mpn)
-      .then(({ matches, matchedQuery, relaxed, diagnostic }) =>
-        sendResponse({ ok: true, matches, matchedQuery, relaxed, diagnostic }),
-      )
-      .catch((err: unknown) =>
-        sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }),
-      );
+    void (async () => {
+      const relayBase = await getRelayUrl();
+      if (!relayBase) {
+        sendResponse({ ok: false, error: NO_RELAY_ERROR });
+        return;
+      }
+      try {
+        const { matches, matchedQuery, relaxed, diagnostic } = await resolveMpnDetailed(
+          message.mpn,
+          relayBase,
+        );
+        sendResponse({ ok: true, matches, matchedQuery, relaxed, diagnostic });
+      } catch (err: unknown) {
+        sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    })();
     return true; // async
   }
 

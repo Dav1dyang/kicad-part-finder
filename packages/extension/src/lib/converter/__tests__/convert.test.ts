@@ -222,18 +222,23 @@ describe('extractMeta datasheet fallback', () => {
   });
 });
 
-// Live smoke test — skipped unless RUN_LIVE_EASYEDA=1 (needs network + the
-// EasyEDA WAF headers baked into fetchEasyedaComponent).
+// Live smoke test — skipped unless RUN_LIVE_EASYEDA=1. It now goes through the
+// deployed Worker relay (the browser/Node WAF-blocks EasyEDA directly), so it
+// also needs RELAY_URL pointing at your deployed Worker.
 const liveDescribe = process.env.RUN_LIVE_EASYEDA === '1' ? describe : describe.skip;
+const LIVE_RELAY = process.env.RELAY_URL ?? '';
 liveDescribe('fetchEasyedaComponent (live)', () => {
   it('fetches a real component result for C3235557', async () => {
-    const live = await fetchEasyedaComponent(LCSC_ID);
+    const live = await fetchEasyedaComponent(LCSC_ID, LIVE_RELAY);
     expect(live).toBeTruthy();
     expect(live.dataStr).toBeTruthy();
     expect(live.packageDetail?.dataStr).toBeTruthy();
   }, 20000);
 
   it('rejects a malformed LCSC id without hitting the network', async () => {
-    await expect(fetchEasyedaComponent('not-an-id')).rejects.toThrow(/Invalid LCSC id/);
+    // Validation runs before any fetch, so the relay base is irrelevant here.
+    await expect(fetchEasyedaComponent('not-an-id', LIVE_RELAY)).rejects.toThrow(
+      /Invalid LCSC id/,
+    );
   });
 });

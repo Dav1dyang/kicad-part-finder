@@ -2,13 +2,17 @@
  * Side panel UI — self-contained (no companion server).
  *
  * Flow:
+ *   0. User pastes their deployed Worker relay URL (stored in chrome.storage.local
+ *      `relayUrl`); until it's set a banner shows and Search/Install are disabled.
  *   1. User grants a KiCad library folder (File System Access, persisted in IDB).
  *   2. User enters an LCSC# or MPN (auto-filled from a detected part if present).
- *   3. The service worker fetches + converts (cross-origin via host_permissions);
- *      an MPN is first resolved to candidate LCSC parts via JLCPCB.
+ *   3. The service worker fetches + converts through the relay (JLCPCB/EasyEDA
+ *      WAF-block the browser directly); an MPN is first resolved to candidate
+ *      LCSC parts via JLCPCB.
  *   4. A card shows editable metadata + an auto-selected library bucket; empty
  *      datasheet/MPN fields are flagged for the user to fill.
- *   5. "Install" writes symbol/footprint/3D-model into the granted folder.
+ *   5. "Install" writes symbol/footprint/3D-model into the granted folder (the
+ *      STEP model is fetched through the relay too).
  */
 
 import type { DetectedPart } from '@kicad-part-finder/shared';
@@ -29,6 +33,9 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 
 const chooseFolderBtn = $<HTMLButtonElement>('chooseFolderBtn');
 const folderName = $('folderName');
+
+const relayUrlInput = $<HTMLInputElement>('relayUrlInput');
+const relayBanner = $('relayBanner');
 
 const searchInput = $<HTMLInputElement>('searchInput');
 const searchBtn = $<HTMLButtonElement>('searchBtn');
@@ -60,6 +67,9 @@ const sourceLinks = $('sourceLinks');
 let libraryFolder: FileSystemDirectoryHandle | null = null;
 let current: ConvertResult | null = null;
 let candidates: JlcMatch[] = [];
+// The deployed Worker relay URL (chrome.storage.local `relayUrl`). All search /
+// convert / model fetches go through it; empty disables Search + Install.
+let relayUrl = '';
 // Debounce live highlight-to-search so rapid re-selections don't spam searches.
 let detectDebounce: ReturnType<typeof setTimeout> | null = null;
 
@@ -83,6 +93,20 @@ async function init() {
     if (m) void convertAndShow(m.lcscId, m);
   });
   installBtn.addEventListener('click', () => void onInstall());
+
+  // Persist the relay URL on every edit; update the banner + disabled states.
+  relayUrlInput.addEventListener('input', () => void onRelayUrlChange());
+
+  // Load the saved relay URL (the deployed Worker). Until it's set, search /
+  // convert / install are disabled and a banner explains why.
+  try {
+    const stored = await chrome.storage.local.get('relayUrl');
+    relayUrl = typeof stored.relayUrl === 'string' ? stored.relayUrl.trim() : '';
+  } catch {
+    relayUrl = '';
+  }
+  relayUrlInput.value = relayUrl;
+  refreshRelayState();
 
   // Try to silently restore the saved folder. Chrome requires a user gesture to
   // (re-)grant permission, so if the grant lapsed we leave the button to prompt.
@@ -150,6 +174,35 @@ async function onChooseFolder() {
   }
 }
 
+// --- Relay URL ---------------------------------------------------------------
+/** Persist the edited relay URL to chrome.storage.local and refresh UI state. */
+async function onRelayUrlChange() {
+  relayUrl = relayUrlInput.value.trim();
+  refreshRelayState();
+  try {
+    await chrome.storage.local.set({ relayUrl });
+  } catch {
+    /* storage unavailable — keep the in-memory value so the session still works */
+  }
+}
+
+/** Whether a relay URL has been configured (search/convert is possible). */
+function hasRelay(): boolean {
+  return relayUrl.length > 0;
+}
+
+/**
+ * Reflect the relay-configured state: toggle the "set your Relay URL" banner and
+ * the Search button, and re-evaluate the Install button (which also needs it).
+ */
+function refreshRelayState() {
+  const missing = !hasRelay();
+  relayBanner.classList.toggle('hidden', !missing);
+  searchBtn.disabled = missing;
+  searchBtn.title = missing ? 'Set your Relay URL first (deploy packages/relay).' : '';
+  refreshInstallEnabled();
+}
+
 // --- Search / convert --------------------------------------------------------
 const LCSC_RE = /^C\d+$/i;
 
@@ -159,6 +212,13 @@ async function runSearch(query: string) {
   hide(secondarySources);
   current = null;
   candidates = [];
+
+  // No relay configured → nothing can be fetched. The banner already explains
+  // this; reinforce it on the search status and bail before any message.
+  if (!hasRelay()) {
+    setStatus(searchStatus, 'Set your Relay URL first (deploy packages/relay).', 'error');
+    return;
+  }
 
   if (!query) {
     setStatus(searchStatus, 'Enter an LCSC# (e.g. C3235557) or an MPN.', 'error');
@@ -319,7 +379,9 @@ function safeHttpUrl(value: string): string | null {
 
 // --- Install -----------------------------------------------------------------
 async function onInstall() {
-  if (!current || !libraryFolder) return;
+  // A relay URL is required even at install time — the 3D-model STEP is fetched
+  // through it. (Search/convert already gate on it, so by here it's normally set.)
+  if (!current || !libraryFolder || !hasRelay()) return;
 
   installBtn.disabled = true;
   installBtn.textContent = 'Installing…';
@@ -335,19 +397,23 @@ async function onInstall() {
 
   let res: InstallPartResult;
   try {
-    res = await installPart(libraryFolder, {
-      bucket,
-      symbol: current.symbol,
-      footprint: current.footprint,
-      model3dUrl: current.model3dUrl,
-      meta: {
-        ...current.meta,
-        mpn: fieldMpn.value.trim() || current.meta.mpn,
-        manufacturer: fieldManufacturer.value.trim(),
-        package: fieldPackage.value.trim(),
-        datasheet: fieldDatasheet.value.trim(),
+    res = await installPart(
+      libraryFolder,
+      {
+        bucket,
+        symbol: current.symbol,
+        footprint: current.footprint,
+        model3dUrl: current.model3dUrl,
+        meta: {
+          ...current.meta,
+          mpn: fieldMpn.value.trim() || current.meta.mpn,
+          manufacturer: fieldManufacturer.value.trim(),
+          package: fieldPackage.value.trim(),
+          datasheet: fieldDatasheet.value.trim(),
+        },
       },
-    });
+      relayUrl,
+    );
   } catch (err) {
     failInstall(err instanceof Error ? err.message : 'Install failed.');
     return;
@@ -426,10 +492,12 @@ function createSourceLink(link: { name: string; url: string; description: string
 
 // --- Small helpers -----------------------------------------------------------
 function refreshInstallEnabled() {
-  installBtn.disabled = !(libraryFolder && current);
-  installBtn.title = libraryFolder
-    ? ''
-    : 'Choose a library folder first.';
+  installBtn.disabled = !(libraryFolder && current && hasRelay());
+  installBtn.title = !hasRelay()
+    ? 'Set your Relay URL first (deploy packages/relay).'
+    : libraryFolder
+      ? ''
+      : 'Choose a library folder first.';
 }
 
 function toggleFlag(flag: HTMLElement, input: HTMLInputElement, missing: boolean) {

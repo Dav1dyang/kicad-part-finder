@@ -465,6 +465,29 @@ code {
   margin-top: 6px;
 }
 
+.relay-label {
+  margin-top: 12px;
+}
+
+#relayHint {
+  margin-top: 6px;
+}
+
+/* Relay-not-set banner — amber, attention-grabbing but not an error. */
+.banner {
+  margin-bottom: 16px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+  color: #fbbf24;
+  font-size: 12px;
+}
+
+.banner code {
+  color: #fbbf24;
+}
+
 .field-label {
   display: block;
   font-size: 11px;

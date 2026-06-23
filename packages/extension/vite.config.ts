@@ -33,9 +33,9 @@ export default defineConfig({
     {
       name: 'copy-extension-assets',
       closeBundle() {
-        // Copy extension manifest, static DNR rules, and icons to dist.
+        // Copy the extension manifest and icons to dist. (The relay replaces the
+        // old declarativeNetRequest Referer hack, so rules.json is gone.)
         cpSync(resolve(__dirname, 'manifest.json'), resolve(__dirname, 'dist/manifest.json'));
-        cpSync(resolve(__dirname, 'rules.json'), resolve(__dirname, 'dist/rules.json'));
         cpSync(resolve(__dirname, 'public/icons'), resolve(__dirname, 'dist/icons'), { recursive: true });
       },
     },
