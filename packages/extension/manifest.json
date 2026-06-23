@@ -61,7 +61,7 @@
     "default_path": "src/sidepanel/index.html"
   },
   "commands": {
-    "_execute_action": {
+    "open-finder": {
       "suggested_key": {
         "default": "Ctrl+Shift+2",
         "mac": "Command+Shift+2"

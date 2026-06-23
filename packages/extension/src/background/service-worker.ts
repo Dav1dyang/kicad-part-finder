@@ -8,7 +8,7 @@
 
 import type { DetectedPart } from '@kicad-part-finder/shared';
 import { convertLcsc } from '../lib/converter/easyeda.js';
-import { resolveMpnToLcsc, type JlcMatch } from '../lib/jlcpcb.js';
+import { resolveMpnDetailed } from '../lib/jlcpcb.js';
 
 // Store the most recently detected part per tab
 const detectedParts = new Map<number, DetectedPart>();
@@ -98,9 +98,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   // Side panel resolving a free-text MPN to candidate LCSC parts via JLCPCB.
+  // Reports `matchedQuery`/`relaxed` so the UI can flag fuzzy (non-exact) hits.
   if (message.type === 'RESOLVE_MPN') {
-    resolveMpnToLcsc(message.mpn)
-      .then((matches: JlcMatch[]) => sendResponse({ ok: true, matches }))
+    resolveMpnDetailed(message.mpn)
+      .then(({ matches, matchedQuery, relaxed }) =>
+        sendResponse({ ok: true, matches, matchedQuery, relaxed }),
+      )
       .catch((err: unknown) =>
         sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }),
       );
@@ -110,25 +113,51 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
-// Handle extension icon click (or Cmd+Shift+2)
-chrome.action.onClicked.addListener(async (tab) => {
-  if (typeof tab.id !== 'number') return;
+/**
+ * Open the finder UI for a given tab: a real side panel where supported, else a
+ * standalone popup window (Arc et al.). Also injects the selection listener on
+ * the source tab so highlight-to-search keeps working wherever the UI lands.
+ *
+ * Shared by the toolbar-icon click and the keyboard shortcut. The shortcut path
+ * may not pass a tab, so fall back to the active tab of the current window.
+ */
+async function openFinder(tab?: chrome.tabs.Tab) {
+  let tabId = tab?.id;
+  if (typeof tabId !== 'number') {
+    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+    tabId = active?.id;
+  }
+  if (typeof tabId !== 'number') return;
 
+  // chrome.sidePanel.open() requires a user gesture; both the icon click and the
+  // command keystroke qualify, so the call is valid from either entry point.
   const supported = await isSidePanelSupported();
 
   if (supported) {
     try {
-      await chrome.sidePanel.open({ tabId: tab.id });
+      await chrome.sidePanel.open({ tabId });
     } catch {
-      await openFinderWindow(tab.id);
+      await openFinderWindow(tabId);
     }
   } else {
-    await openFinderWindow(tab.id);
+    await openFinderWindow(tabId);
   }
 
   // Keep injecting the selection listener on the SOURCE tab so highlight-to-search
   // still works regardless of where the UI is shown.
-  await injectSelectionListener(tab.id);
+  await injectSelectionListener(tabId);
+}
+
+// Handle extension icon click.
+chrome.action.onClicked.addListener((tab) => {
+  void openFinder(tab);
+});
+
+// Handle the keyboard shortcut (Cmd/Ctrl+Shift+2). In browsers without a working
+// sidePanel (e.g. Arc), _execute_action doesn't reliably fire onClicked when there
+// is no default_popup, so we drive a custom command through the same open path.
+chrome.commands.onCommand.addListener((command, tab) => {
+  if (command === 'open-finder') void openFinder(tab);
 });
 
 /**

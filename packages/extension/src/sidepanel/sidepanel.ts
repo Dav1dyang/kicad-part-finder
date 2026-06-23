@@ -60,6 +60,8 @@ const sourceLinks = $('sourceLinks');
 let libraryFolder: FileSystemDirectoryHandle | null = null;
 let current: ConvertResult | null = null;
 let candidates: JlcMatch[] = [];
+// Debounce live highlight-to-search so rapid re-selections don't spam searches.
+let detectDebounce: ReturnType<typeof setTimeout> | null = null;
 
 // --- Init --------------------------------------------------------------------
 async function init() {
@@ -110,11 +112,19 @@ async function init() {
     /* no detected part */
   }
 
-  // React to live detections while the UI is open.
+  // React to live detections while the UI is open. Runtime messages are global
+  // broadcasts (not tab-scoped), so this fires whether the UI is a side panel or
+  // a popup window opened with `?tab=`. A highlighted selection (or any detected
+  // part) fills the box AND auto-runs the search — matching v1 behaviour —
+  // debounced so dragging across text doesn't fire a search per character.
   chrome.runtime.onMessage.addListener((message) => {
     if (message.type === 'PART_DETECTED' && message.part) {
       const part = message.part as DetectedPart;
-      if (!searchInput.value) searchInput.value = part.lcscId || part.mpn || '';
+      const text = part.lcscId || part.mpn || '';
+      if (!text) return;
+      searchInput.value = text;
+      if (detectDebounce) clearTimeout(detectDebounce);
+      detectDebounce = setTimeout(() => void runSearch(searchInput.value.trim()), 350);
     }
   });
 }
@@ -164,13 +174,20 @@ async function runSearch(query: string) {
   // Otherwise treat as MPN: resolve to LCSC candidates via JLCPCB.
   setStatus(searchStatus, `Looking up "${query}" on JLCPCB…`, 'loading');
   let matches: JlcMatch[] = [];
+  let relaxed = false;
+  let matchedQuery = '';
   try {
     const resp = await chrome.runtime.sendMessage({ type: 'RESOLVE_MPN', mpn: query });
-    if (resp?.ok) matches = resp.matches as JlcMatch[];
+    if (resp?.ok) {
+      matches = resp.matches as JlcMatch[];
+      relaxed = Boolean(resp.relaxed);
+      matchedQuery = (resp.matchedQuery as string) || '';
+    }
   } catch {
     /* fall through to the no-results path */
   }
 
+  // Only when even the relaxed fallbacks came back empty do we suggest LCSC#.
   if (matches.length === 0) {
     setStatus(
       searchStatus,
@@ -181,15 +198,18 @@ async function runSearch(query: string) {
     return;
   }
 
+  // The input wasn't an exact catalog hit — these are the closest matches.
+  const note = relaxed ? `No exact match — closest results for ${matchedQuery}` : undefined;
+
   candidates = matches;
   if (matches.length === 1) {
-    await convertAndShow(matches[0].lcscId, matches[0]);
+    await convertAndShow(matches[0].lcscId, matches[0], note);
     return;
   }
 
   // Multiple matches — let the user pick (auto-convert the top/most-in-stock).
   renderCandidates(matches);
-  await convertAndShow(matches[0].lcscId, matches[0]);
+  await convertAndShow(matches[0].lcscId, matches[0], note);
 }
 
 function renderCandidates(matches: JlcMatch[]) {
@@ -205,7 +225,7 @@ function renderCandidates(matches: JlcMatch[]) {
   show(candidateSection);
 }
 
-async function convertAndShow(lcscId: string, match: JlcMatch | null) {
+async function convertAndShow(lcscId: string, match: JlcMatch | null, note?: string) {
   setStatus(searchStatus, `Fetching + converting ${lcscId}…`, 'loading');
   hide(partCard);
 
@@ -220,7 +240,13 @@ async function convertAndShow(lcscId: string, match: JlcMatch | null) {
   }
 
   current = result;
-  hide(searchStatus);
+  // Keep the "closest results" hint visible when the match came from a relaxed
+  // query; otherwise clear the transient status.
+  if (note) {
+    setStatus(searchStatus, note, 'loading');
+  } else {
+    hide(searchStatus);
+  }
   showCard(result, match);
   showSecondarySources(result.meta.mpn || lcscId);
 }
