@@ -5,7 +5,7 @@
 // (`@/types/easyeda` -> `./types`). No React, no Node-only APIs — safe to run in
 // a browser service worker. See ../../../THIRD_PARTY.md for attribution.
 
-import { ParsedFootprint } from './types';
+import { KiCadPinType, ParsedFootprint, ParsedSchematic } from './types';
 
 // Safe parseFloat that returns a default value if NaN
 function safeParseFloat(value: string | undefined, defaultValue: number = 0): number {
@@ -382,37 +382,172 @@ function drillToKi(holeRadius: number, holeLength: number | undefined, padHeight
   return ` (drill ${(holeRadius * 2).toFixed(4)})`;
 }
 
-// Convert schematic symbol to KiCad symbol format
-export function convertToKiCadSymbol(schematic: any): string {
+/**
+ * Component metadata the symbol exporter stamps into KiCad properties. Mirrors
+ * the relevant subset of {@link ConvertMeta} (in easyeda.ts) but kept local so
+ * kicad-parser.ts stays free of any cross-module/runtime dependency.
+ */
+export interface SymbolMeta {
+  mpn?: string;
+  manufacturer?: string;
+  datasheet?: string;
+  lcsc?: string;
+  package?: string;
+}
+
+// KiCad symbols live on a 50mil grid. 50mil = 1.27mm; in raw EasyEDA units
+// (10mil pixels) that's 5 px. Snapping the normalization origin to 5 px and the
+// pin coordinates to 1.27mm keeps everything on-grid in the schematic editor.
+const SYMBOL_GRID_MM = 1.27;
+const EASYEDA_GRID_PX = 5;
+
+/** Round a millimetre value to the nearest KiCad 50mil (1.27mm) grid step. */
+function snapMmToGrid(mm: number): number {
+  return Math.round(mm / SYMBOL_GRID_MM) * SYMBOL_GRID_MM;
+}
+
+/** Escape characters that would break a KiCad quoted string. */
+function escapeKiStr(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/**
+ * Sanitize a string for use as a KiCad symbol/library id. KiCad forbids quotes,
+ * parens, and whitespace in a symbol name; collapse anything unsafe to '_'.
+ */
+function sanitizeSymbolName(value: string): string {
+  return value.replace(/[^A-Za-z0-9_.+-]/g, '_');
+}
+
+/**
+ * Compute the normalization origin (in raw EasyEDA units) to subtract from every
+ * symbol coordinate so the body ends up centered on the KiCad origin.
+ *
+ * Prefers EasyEDA's recorded canvas center (`head.x`/`head.y`, surfaced as
+ * `schematic.bbox`), snapped to the 5px grid. When that's missing we fall back
+ * to the center of the bounding box of the pins + rectangles so the symbol is
+ * still re-centered rather than left at its raw ~400,300 offset.
+ */
+function computeSymbolOrigin(schematic: ParsedSchematic): { x: number; y: number } {
+  if (schematic.bbox) {
+    return {
+      x: Math.round(schematic.bbox.x / EASYEDA_GRID_PX) * EASYEDA_GRID_PX,
+      y: Math.round(schematic.bbox.y / EASYEDA_GRID_PX) * EASYEDA_GRID_PX,
+    };
+  }
+
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (const pin of schematic.pins) {
+    if (Number.isFinite(pin.x)) xs.push(pin.x);
+    if (Number.isFinite(pin.y)) ys.push(pin.y);
+  }
+  for (const rect of schematic.rectangles) {
+    xs.push(rect.x, rect.x + rect.width);
+    ys.push(rect.y, rect.y + rect.height);
+  }
+  if (xs.length === 0 || ys.length === 0) return { x: 0, y: 0 };
+
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  return {
+    x: Math.round(cx / EASYEDA_GRID_PX) * EASYEDA_GRID_PX,
+    y: Math.round(cy / EASYEDA_GRID_PX) * EASYEDA_GRID_PX,
+  };
+}
+
+/**
+ * Map an EasyEDA pin rotation to a KiCad pin orientation angle.
+ *
+ * KiCad's pin angle points from the pin's free endpoint back toward the body —
+ * the opposite of EasyEDA's convention — so the two differ by 180 degrees:
+ * EasyEDA 0->180, 90->270, 180->0, 270->90.
+ */
+function pinAngleToKi(rotation: number | undefined): number {
+  const r = Number.isFinite(rotation) ? (rotation as number) : 0;
+  return (((180 + r) % 360) + 360) % 360;
+}
+
+/**
+ * Convert a parsed EasyEDA schematic symbol to KiCad `.kicad_sym` text.
+ *
+ * Milestone-4 polish vs. the original passthrough:
+ *  - Reference prefix comes from EasyEDA `pre` (e.g. "U?"->"U"), default "U".
+ *  - Value + symbol name = the MPN (not the package string).
+ *  - Pins carry their real EasyEDA NAME text, a mapped electrical type, and a
+ *    proper orientation; body + pins are normalized to the KiCad origin/grid.
+ *  - Footprint / Datasheet / Manufacturer / MPN / LCSC properties are populated.
+ *
+ * @param schematic Parsed EasyEDA symbol (see {@link ParsedSchematic}).
+ * @param meta Optional component metadata for the stamped properties.
+ */
+export function convertToKiCadSymbol(schematic: ParsedSchematic, meta: SymbolMeta = {}): string {
   const lines: string[] = [];
-  const symbolName = schematic.name.replace(/[^a-zA-Z0-9_-]/g, '_') || 'Symbol';
+
+  // Value/name = MPN; fall back through the parsed MPN, then the package, then a
+  // generic literal so we never emit an empty symbol name.
+  const mpn = (meta.mpn || schematic.mpn || '').trim();
+  const valueText = mpn || schematic.name || 'Symbol';
+  const symbolName = sanitizeSymbolName(valueText) || 'Symbol';
+
+  // Reference prefix from EasyEDA `pre` ("?" already stripped upstream); KiCad's
+  // generic fallback designator is "U".
+  const reference = (schematic.prefix || '').trim() || 'U';
+
+  const origin = computeSymbolOrigin(schematic);
+  // Convert a raw EasyEDA coordinate to KiCad mm relative to the origin. KiCad
+  // inverts Y. `snap` rounds onto the 50mil grid (used for pins, not graphics).
+  const kx = (v: number, snap = false): number => {
+    const mm = convertToKiCadMm(v - origin.x);
+    return snap ? snapMmToGrid(mm) : mm;
+  };
+  const ky = (v: number, snap = false): number => {
+    const mm = -convertToKiCadMm(v - origin.y);
+    return snap ? snapMmToGrid(mm) : mm;
+  };
 
   lines.push('(kicad_symbol_lib (version 20211014) (generator easyeda2kicad)');
-  lines.push(`  (symbol "${symbolName}" (pin_names (offset 1.016)) (in_bom yes) (on_board yes)`);
-  lines.push('    (property "Reference" "U" (id 0) (at 0 0 0)');
+  lines.push(`  (symbol "${escapeKiStr(symbolName)}" (pin_names (offset 1.016)) (in_bom yes) (on_board yes)`);
+  lines.push(`    (property "Reference" "${escapeKiStr(reference)}" (id 0) (at 0 2.54 0)`);
   lines.push('      (effects (font (size 1.27 1.27)))');
   lines.push('    )');
-  lines.push(`    (property "Value" "${symbolName}" (id 1) (at 0 -2.54 0)`);
+  lines.push(`    (property "Value" "${escapeKiStr(valueText)}" (id 1) (at 0 -2.54 0)`);
   lines.push('      (effects (font (size 1.27 1.27)))');
   lines.push('    )');
-  lines.push('    (property "Footprint" "" (id 2) (at 0 0 0)');
+  lines.push(`    (property "Footprint" "${escapeKiStr(meta.package ?? '')}" (id 2) (at 0 0 0)`);
   lines.push('      (effects (font (size 1.27 1.27)) hide)');
   lines.push('    )');
-  lines.push('    (property "Datasheet" "" (id 3) (at 0 0 0)');
+  lines.push(`    (property "Datasheet" "${escapeKiStr(meta.datasheet ?? '')}" (id 3) (at 0 0 0)`);
   lines.push('      (effects (font (size 1.27 1.27)) hide)');
   lines.push('    )');
+
+  // Extra (hidden) properties, only when the source value is non-empty.
+  let propId = 4;
+  const extraProps: Array<[string, string | undefined]> = [
+    ['Manufacturer', meta.manufacturer],
+    ['MPN', mpn || undefined],
+    ['LCSC', meta.lcsc],
+  ];
+  for (const [name, value] of extraProps) {
+    const v = (value ?? '').trim();
+    if (!v) continue;
+    lines.push(`    (property "${escapeKiStr(name)}" "${escapeKiStr(v)}" (id ${propId}) (at 0 0 0)`);
+    lines.push('      (effects (font (size 1.27 1.27)) hide)');
+    lines.push('    )');
+    propId += 1;
+  }
 
   // Symbol graphic items
-  lines.push('    (symbol "' + symbolName + '_0_1"');
+  lines.push('    (symbol "' + escapeKiStr(symbolName) + '_0_1"');
 
   // Convert polylines
-  schematic.polylines.forEach((polyline: any) => {
+  schematic.polylines.forEach((polyline) => {
     if (polyline.points.length >= 2) {
       for (let i = 0; i < polyline.points.length - 1; i++) {
-        const x1 = convertToKiCadMm(polyline.points[i].x);
-        const y1 = -convertToKiCadMm(polyline.points[i].y); // Y is inverted in KiCad
-        const x2 = convertToKiCadMm(polyline.points[i + 1].x);
-        const y2 = -convertToKiCadMm(polyline.points[i + 1].y);
+        const x1 = kx(polyline.points[i].x);
+        const y1 = ky(polyline.points[i].y); // Y is inverted in KiCad
+        const x2 = kx(polyline.points[i + 1].x);
+        const y2 = ky(polyline.points[i + 1].y);
         const width = convertToKiCadMm(polyline.strokeWidth);
 
         lines.push(`      (polyline`);
@@ -428,11 +563,11 @@ export function convertToKiCadSymbol(schematic: any): string {
   });
 
   // Convert rectangles
-  schematic.rectangles.forEach((rect: any) => {
-    const x1 = convertToKiCadMm(rect.x);
-    const y1 = -convertToKiCadMm(rect.y);
-    const x2 = convertToKiCadMm(rect.x + rect.width);
-    const y2 = -convertToKiCadMm(rect.y + rect.height);
+  schematic.rectangles.forEach((rect) => {
+    const x1 = kx(rect.x);
+    const y1 = ky(rect.y);
+    const x2 = kx(rect.x + rect.width);
+    const y2 = ky(rect.y + rect.height);
 
     lines.push(`      (rectangle (start ${x1.toFixed(4)} ${y1.toFixed(4)}) (end ${x2.toFixed(4)} ${y2.toFixed(4)})`);
     lines.push(`        (stroke (width 0.254) (type default) (color 0 0 0 0))`);
@@ -441,9 +576,9 @@ export function convertToKiCadSymbol(schematic: any): string {
   });
 
   // Convert circles
-  schematic.circles.forEach((circle: any) => {
-    const cx = convertToKiCadMm(circle.x);
-    const cy = -convertToKiCadMm(circle.y);
+  schematic.circles.forEach((circle) => {
+    const cx = kx(circle.x);
+    const cy = ky(circle.y);
     const r = convertToKiCadMm(circle.radius);
 
     lines.push(`      (circle (center ${cx.toFixed(4)} ${cy.toFixed(4)}) (radius ${r.toFixed(4)})`);
@@ -456,21 +591,23 @@ export function convertToKiCadSymbol(schematic: any): string {
 
   // Add pins
   if (schematic.pins && schematic.pins.length > 0) {
-    lines.push('    (symbol "' + symbolName + '_1_1"');
+    lines.push('    (symbol "' + escapeKiStr(symbolName) + '_1_1"');
 
-    schematic.pins.forEach((pin: any) => {
-      const x = convertToKiCadMm(pin.x);
-      const y = -convertToKiCadMm(pin.y);
-      const pinName = pin.name || pin.number;
-      const pinNumber = pin.number || '1';
+    schematic.pins.forEach((pin, index) => {
+      const x = kx(pin.x, true);
+      const y = ky(pin.y, true);
+      const pinName = (pin.name && pin.name.trim()) || pin.number || '~';
+      const pinNumber = pin.number || String(index + 1);
+      const pinType: KiCadPinType = pin.electricType ?? 'passive';
+      const angle = pinAngleToKi(pin.rotation);
+      // Pin length from the EasyEDA path (in 10mil px), snapped to grid; default
+      // to one grid step when EasyEDA gave nothing sane.
+      const lengthMm = pin.length ? snapMmToGrid(convertToKiCadMm(pin.length)) : SYMBOL_GRID_MM;
+      const length = lengthMm > 0 ? lengthMm : SYMBOL_GRID_MM;
 
-      // Determine pin orientation (assume left side for now)
-      const orientation = 'R'; // Right (pointing right from left side)
-      const length = 2.54;
-
-      lines.push(`      (pin passive line (at ${x.toFixed(4)} ${y.toFixed(4)} 0) (length ${length.toFixed(4)})`);
-      lines.push(`        (name "${pinName}" (effects (font (size 1.27 1.27))))`);
-      lines.push(`        (number "${pinNumber}" (effects (font (size 1.27 1.27))))`);
+      lines.push(`      (pin ${pinType} line (at ${x.toFixed(4)} ${y.toFixed(4)} ${angle}) (length ${length.toFixed(4)})`);
+      lines.push(`        (name "${escapeKiStr(pinName)}" (effects (font (size 1.27 1.27))))`);
+      lines.push(`        (number "${escapeKiStr(pinNumber)}" (effects (font (size 1.27 1.27))))`);
       lines.push(`      )`);
     });
 

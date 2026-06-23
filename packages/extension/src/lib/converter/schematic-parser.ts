@@ -1,13 +1,50 @@
 // Adapted from hulryung/easyeda2kicad-web (MIT per its README). https://github.com/hulryung/easyeda2kicad-web
 //
 // Standalone extraction of `parseSchematicData` from the upstream React
-// `components/SchematicViewer.tsx`. The parse logic is byte-for-byte the
-// upstream implementation; everything React (hooks, JSX, the viewer component)
-// has been dropped, and the original debug `console.log` was removed. The
+// `components/SchematicViewer.tsx`. The geometry parse logic is the upstream
+// implementation (React hooks/JSX dropped, debug `console.log` removed). The
 // `ParsedSchematic` type now lives in `./types`. No Node-only APIs — safe to run
 // in a browser service worker. See ../../../THIRD_PARTY.md for attribution.
+//
+// Milestone 4 (symbol polish) adds, as an independent clean-room reimplementation
+// (no code copied from the AGPL easyeda2kicad.py), extraction of: the Reference
+// prefix + MPN + normalization origin from `head`, and per-pin NAME text +
+// electrical type out of the EasyEDA pin string's `^^`-delimited sub-parts.
 
-import { ParsedSchematic } from './types';
+import { KiCadPinType, ParsedSchematic } from './types';
+
+/**
+ * Map an EasyEDA pin `electric` integer to a KiCad electrical type.
+ *
+ * EasyEDA encodes: 0 = unspecified, 1 = input, 2 = output, 3 = bidirectional,
+ * 4 = power. KiCad spells "power" as `power_in`. Anything we don't recognize —
+ * including the common 0/unspecified case — falls back to `passive`, which is
+ * the safest neutral type for a generic library part.
+ */
+function easyedaPinTypeToKiCad(electric: string | undefined): KiCadPinType {
+  switch ((electric ?? '').trim()) {
+    case '1':
+      return 'input';
+    case '2':
+      return 'output';
+    case '3':
+      return 'bidirectional';
+    case '4':
+      return 'power_in';
+    default:
+      return 'passive';
+  }
+}
+
+/**
+ * Derive the KiCad Reference designator prefix from an EasyEDA `pre` field by
+ * stripping the placeholder `?` (`"U?"` -> `"U"`, `"R?"` -> `"R"`). Returns ''
+ * when the input is empty/missing so the caller can apply its own fallback.
+ */
+function prefixFromPre(pre: string | undefined): string {
+  if (typeof pre !== 'string') return '';
+  return pre.replace(/\?/g, '').trim();
+}
 
 export function parseSchematicData(dataStr: string | any): ParsedSchematic {
   const schematic: ParsedSchematic = {
@@ -26,8 +63,23 @@ export function parseSchematicData(dataStr: string | any): ParsedSchematic {
     }
 
     // Get component package name (use package, not name, to match footprint naming)
-    if (data.head?.c_para) {
-      schematic.name = data.head.c_para.package || '';
+    const cPara = data.head?.c_para;
+    if (cPara) {
+      schematic.name = cPara.package || '';
+      // Reference prefix (e.g. "U?" -> "U") and the manufacturer part number,
+      // used by the symbol exporter for the Reference / Value / symbol name.
+      schematic.prefix = prefixFromPre(cPara.pre);
+      schematic.mpn =
+        cPara['Manufacturer Part'] || cPara['name'] || '';
+    }
+
+    // Normalization origin: EasyEDA stores the symbol's canvas center in
+    // head.x / head.y. Subtracting it (see the exporter) re-centers the symbol
+    // near the KiCad origin. Only record it when both are finite numbers.
+    const headX = parseFloat(data.head?.x);
+    const headY = parseFloat(data.head?.y);
+    if (Number.isFinite(headX) && Number.isFinite(headY)) {
+      schematic.bbox = { x: headX, y: headY };
     }
 
     // Parse shape array
@@ -46,17 +98,35 @@ export function parseSchematicData(dataStr: string | any): ParsedSchematic {
         const type = parts[0];
 
         switch (type) {
-          case 'P':
-            // PIN format: P~show~0~pinNumber~x~y~rotation~gId~...^^x~y^^M x y h/v length~...
+          case 'P': {
+            // EasyEDA pin string. The settings sub-part (before the first "^^")
+            // is `P~show~electric~pinNumber~x~y~rotation~gId~isLocked`; further
+            // "^^"-delimited sub-parts carry the dot, path, NAME and NUMBER text,
+            // etc. Indices below are derived from that layout (clean-room).
             const pinNumber = parts[3] || '';
             const pinX = parseFloat(parts[4] || '0');
             const pinY = parseFloat(parts[5] || '0');
             const pinRotation = parseFloat(parts[6] || '0');
+            const electricType = easyedaPinTypeToKiCad(parts[2]);
+
+            const pathParts = shapeStr.split('^^');
+
+            // Pin NAME text lives in sub-part index 3, as
+            // `visible~textX~textY~textRot~NAMETEXT~anchor~...` — field 4 is the
+            // visible label (e.g. "GND", "VOUT"). Fall back to the pad number
+            // when EasyEDA gives no usable name.
+            let pinName = pinNumber;
+            if (pathParts.length > 3) {
+              const nameFields = pathParts[3].split('~');
+              const nameText = (nameFields[4] ?? '').trim();
+              if (nameText) {
+                pinName = nameText;
+              }
+            }
 
             // Extract pin length from SVG path data
             let pinLength = 10; // default
             // Find the SVG path part after ^^
-            const pathParts = shapeStr.split('^^');
             if (pathParts.length > 2) {
               // pathParts[2] contains something like "M 380 280 h 20"
               const pathData = pathParts[2];
@@ -68,13 +138,15 @@ export function parseSchematicData(dataStr: string | any): ParsedSchematic {
 
             schematic.pins.push({
               number: pinNumber,
-              name: pinNumber, // Use number as name for now
+              name: pinName,
               x: pinX,
               y: pinY,
               rotation: pinRotation,
               length: pinLength,
+              electricType,
             });
             break;
+          }
 
           case 'PL':
             // Polyline format: PL~x1 y1 x2 y2 x3 y3...~color~width~layer~style~gId~flags

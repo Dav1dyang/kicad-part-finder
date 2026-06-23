@@ -174,8 +174,18 @@ export function convertFromResult(result: EasyedaResult, lcscId: string): Conver
   const schematicData = result.dataStr;
   const footprintData = result.packageDetail?.dataStr;
 
+  // Metadata is computed first so the symbol exporter can stamp it into the
+  // symbol's Value/Footprint/Datasheet/Manufacturer/MPN/LCSC properties.
+  const meta = extractMeta(result, lcscId);
+
   const schematic = parseSchematicData(schematicData);
-  const symbol = convertToKiCadSymbol(schematic);
+  const symbol = convertToKiCadSymbol(schematic, {
+    mpn: meta.mpn,
+    manufacturer: meta.manufacturer,
+    datasheet: meta.datasheet,
+    lcsc: meta.lcsc,
+    package: meta.package,
+  });
 
   const parsedFootprint = parseEasyEDAFootprint(footprintData);
   const footprint = convertToKiCadFootprint(
@@ -194,7 +204,7 @@ export function convertFromResult(result: EasyedaResult, lcscId: string): Conver
     symbol,
     footprint,
     model3dUrl,
-    meta: extractMeta(result, lcscId),
+    meta,
   };
 }
 

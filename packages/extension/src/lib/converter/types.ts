@@ -62,9 +62,37 @@ export interface ParsedFootprint {
   }>;
 }
 
+/**
+ * KiCad electrical pin type. Mirrors the subset of EasyEDA pin types the
+ * converter understands; everything else maps to `passive`.
+ */
+export type KiCadPinType =
+  | 'input'
+  | 'output'
+  | 'bidirectional'
+  | 'power_in'
+  | 'passive'
+  | 'unspecified';
+
 /** Intermediate representation of a parsed EasyEDA schematic symbol. */
 export interface ParsedSchematic {
   name: string;
+  /**
+   * KiCad Reference designator prefix derived from EasyEDA `head.c_para.pre`
+   * (the trailing `?` stripped), e.g. `R`, `C`, `U`. Empty when unknown.
+   */
+  prefix?: string;
+  /**
+   * Manufacturer part number from `head.c_para` ("Manufacturer Part" / "name").
+   * Drives the symbol Value + symbol name. Empty when unknown.
+   */
+  mpn?: string;
+  /**
+   * Normalization origin in raw EasyEDA units (`head.x` / `head.y`). Subtracting
+   * it before scaling re-centers the symbol near the KiCad origin. Undefined
+   * when the document carries no usable origin.
+   */
+  bbox?: { x: number; y: number };
   pins: Array<{
     number: string;
     name: string;
@@ -72,6 +100,8 @@ export interface ParsedSchematic {
     y: number;
     rotation?: number;
     length?: number;
+    /** KiCad electrical type derived from the EasyEDA `electric` integer. */
+    electricType?: KiCadPinType;
   }>;
   polylines: Array<{
     points: Array<{ x: number; y: number }>;
