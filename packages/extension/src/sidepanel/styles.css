@@ -75,14 +75,13 @@ body {
   line-height: 1.45;
   color: var(--text);
   background: var(--bg);
-  /* A barely-there top glow + fine vertical hairlines give the dark surface
-     depth without colour. Both are in oklab so they stay neutral. */
+  /* A barely-there top glow gives the dark surface depth without colour
+     (oklab, neutral). No ruled-line texture: it tiled edge-to-edge and
+     looked wrong across a wide browser tab. */
   background-image:
     radial-gradient(120% 60% at 50% -10%,
       color-mix(in oklab, var(--accent) 6%, transparent) 0%,
-      transparent 60%),
-    linear-gradient(var(--line) 1px, transparent 1px);
-  background-size: 100% 100%, 100% 28px;
+      transparent 60%);
   background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
