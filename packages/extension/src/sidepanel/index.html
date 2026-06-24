@@ -56,7 +56,7 @@
       </button>
     </div>
 
-    <!-- Settings disclosure body: the relay URL field + open-mode toggle. -->
+    <!-- Settings disclosure body: the relay URL field + open-mode selector. -->
     <section id="settingsPanel" class="settings-panel hidden" aria-label="Settings">
       <label class="micro-label" for="relayUrlInput">Relay URL</label>
       <input id="relayUrlInput" class="text-input mono" type="text"
@@ -64,18 +64,35 @@
              autocomplete="off" spellcheck="false" />
       <p class="hint">The deployed relay that proxies JLCPCB &amp; EasyEDA. See <code>packages/relay</code>.</p>
 
-      <!-- Open mode: switch to a standalone floating window that survives tab/app
-           switches (Document PiP gets dropped on tab-return in Arc). -->
-      <div class="setting-toggle">
-        <label class="toggle" for="windowModeToggle">
-          <input id="windowModeToggle" class="toggle-input" type="checkbox" role="switch" />
-          <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
-          <span class="toggle-text">
-            <span class="toggle-title">Open as a floating window</span>
-            <span class="toggle-hint">Stays open across tabs — best for Arc (not always-on-top).</span>
-          </span>
-        </label>
-        <p id="windowModeNote" class="setting-note hidden" role="status">Applies next time you open the finder.</p>
+      <!-- Open mode: how the finder appears when you open it. A 3-way segmented
+           selector — side panel/tab (auto), a standalone floating window, or a
+           draggable in-page overlay. Persists `openMode`. -->
+      <div class="setting-block">
+        <span class="micro-label" id="openModeLabel">Open the finder as</span>
+        <div id="openModeSelector" class="segmented" role="radiogroup" aria-labelledby="openModeLabel">
+          <label class="segment">
+            <input class="segment-input" type="radio" name="openMode" value="auto" />
+            <span class="segment-face">
+              <span class="segment-title">Side panel / tab</span>
+              <span class="segment-hint">Default — floats via Picture-in-Picture.</span>
+            </span>
+          </label>
+          <label class="segment">
+            <input class="segment-input" type="radio" name="openMode" value="window" />
+            <span class="segment-face">
+              <span class="segment-title">Floating window</span>
+              <span class="segment-hint">Stays open across tabs — best for Arc.</span>
+            </span>
+          </label>
+          <label class="segment">
+            <input class="segment-input" type="radio" name="openMode" value="overlay" />
+            <span class="segment-face">
+              <span class="segment-title">In-page overlay</span>
+              <span class="segment-hint">A draggable panel on the current page.</span>
+            </span>
+          </label>
+        </div>
+        <p id="windowModeNote" class="setting-note hidden" role="status">Reopen the finder via the toolbar icon to apply.</p>
       </div>
     </section>
 

@@ -33,6 +33,12 @@ import {
 } from '../lib/library-writer.js';
 import { getSecondarySourceLinks } from '../lib/mpn-sources.js';
 import { parseSourceTabId, isWindowMode } from './source-tab.js';
+import {
+  isOverlayMode,
+  isSetupMode,
+  parseInstallLcsc,
+  parseBucket,
+} from '../content/overlay-params.js';
 import { isPipSupported, floatOnTop, type FloatHandle } from './float.js';
 import { createPreviewController, type PreviewController } from './preview-controller.js';
 
@@ -48,8 +54,8 @@ const settingsPanel = $('settingsPanel');
 const floatingNote = $('floatingNote');
 const windowNote = $('windowNote');
 
-// Settings — open mode
-const windowModeToggle = $<HTMLInputElement>('windowModeToggle');
+// Settings — open mode (3-way segmented selector: auto / window / overlay)
+const openModeSelector = $('openModeSelector');
 const windowModeNote = $('windowModeNote');
 
 // Readiness strip
@@ -118,6 +124,23 @@ let floatHandle: FloatHandle | null = null;
 // True when this document is the standalone floating popup window (URL `&win=1`).
 // Document PiP can't be used here, so the Float button is hidden and a tag shown.
 const runningInWindow = isWindowMode(location.search);
+// True when this document is the finder UI running INSIDE the in-page overlay
+// iframe (`?overlay=1`). File System Access is blocked in that cross-origin
+// iframe, so folder-pick + install are delegated to a real window via the SW.
+const runningInOverlay = isOverlayMode(location.search);
+// True when this document is the one-time folder-grant helper window the SW
+// opens for the overlay (`?win=1&setup=1`): focus the picker, grant, close.
+const runningInSetup = isSetupMode(location.search);
+// The LCSC id this auto-install helper window must install (`?win=1&install=…`),
+// or null. Set → on load, auto-convert + install against the saved folder, then
+// close (no extra click when the folder grant is valid).
+const autoInstallLcsc = parseInstallLcsc(location.search);
+// chrome.storage.local key recording that the overlay's library folder is
+// granted (the overlay iframe can't hold the FS handle, so it tracks readiness
+// + the folder name here; the real handle lives in the helper windows' IndexedDB).
+const OVERLAY_LIB_KEY = 'overlayLibraryName';
+// Mirror of OVERLAY_LIB_KEY for the overlay iframe (which has no real handle).
+let overlayLibraryName = '';
 // Symbol/Footprint/3D preview block in the result card (lazy per-tab render).
 let preview: PreviewController | null = null;
 
@@ -146,8 +169,11 @@ async function init() {
   // Keep the two relay inputs (settings + setup) mirrored and persisted.
   relayUrlInput.addEventListener('input', () => void onRelayUrlChange(relayUrlInput.value));
   relayUrlInputSetup.addEventListener('input', () => void onRelayUrlChange(relayUrlInputSetup.value));
-  // Open-mode toggle: floating window vs. the default (side panel / tab+PiP).
-  windowModeToggle.addEventListener('change', () => void onOpenModeToggle(windowModeToggle.checked));
+  // Open-mode selector: side panel/tab (auto) · floating window · in-page overlay.
+  openModeSelector.addEventListener('change', (e) => {
+    const target = e.target as HTMLInputElement;
+    if (target?.name === 'openMode') void onOpenModeChange(target.value);
+  });
 
   // --- Search ---
   searchBtn.addEventListener('click', () => void runSearch(searchInput.value.trim()));
@@ -174,21 +200,35 @@ async function init() {
   try {
     const stored = await chrome.storage.local.get(['relayUrl', 'openMode']);
     relayUrl = typeof stored.relayUrl === 'string' ? stored.relayUrl.trim() : '';
-    // Missing/unknown openMode → 'auto' (default). Reflect it in the toggle.
-    windowModeToggle.checked = stored.openMode === 'window';
+    // Missing/unknown openMode → 'auto' (default). Reflect it in the selector.
+    selectOpenMode(normalizeOpenMode(stored.openMode));
   } catch {
     relayUrl = '';
   }
   relayUrlInput.value = relayUrl;
   relayUrlInputSetup.value = relayUrl;
 
-  // Try to silently restore the saved folder. Chrome requires a user gesture to
-  // (re-)grant permission, so if the grant lapsed we leave the pill to prompt.
-  try {
-    const saved = await getSavedFolder();
-    if (saved) libraryFolder = saved;
-  } catch {
-    /* needs a gesture — user clicks the Library pill / "Choose folder" */
+  if (runningInOverlay) {
+    // Inside the overlay iframe FS-Access is blocked, so we can't hold the real
+    // directory handle. Track readiness via chrome.storage (shared across all
+    // extension contexts, unlike the partitioned iframe IndexedDB): the helper
+    // windows record the granted folder's name there.
+    try {
+      const stored = await chrome.storage.local.get(OVERLAY_LIB_KEY);
+      overlayLibraryName = typeof stored[OVERLAY_LIB_KEY] === 'string' ? stored[OVERLAY_LIB_KEY] : '';
+    } catch {
+      overlayLibraryName = '';
+    }
+  } else {
+    // Top-level document (side panel / tab / window / helper): silently restore
+    // the saved folder. Chrome requires a user gesture to (re-)grant permission,
+    // so if the grant lapsed we leave the pill to prompt.
+    try {
+      const saved = await getSavedFolder();
+      if (saved) libraryFolder = saved;
+    } catch {
+      /* needs a gesture — user clicks the Library pill / "Choose folder" */
+    }
   }
 
   refreshReadiness();
@@ -213,7 +253,9 @@ async function init() {
 
   // React to live detections while the UI is open. A highlighted selection (or
   // any detected part) fills the box AND auto-runs the search — debounced so
-  // dragging across text doesn't fire a search per character.
+  // dragging across text doesn't fire a search per character. Also (overlay
+  // iframe only) refresh readiness when a delegated folder-grant / install
+  // window finishes.
   chrome.runtime.onMessage.addListener((message) => {
     if (message.type === 'PART_DETECTED' && message.part) {
       const part = message.part as DetectedPart;
@@ -222,8 +264,146 @@ async function init() {
       searchInput.value = text;
       if (detectDebounce) clearTimeout(detectDebounce);
       detectDebounce = setTimeout(() => void runSearch(searchInput.value.trim()), 350);
+    } else if (runningInOverlay && message.type === 'OVERLAY_FOLDER_READY') {
+      void refreshOverlayReadiness();
+    } else if (runningInOverlay && message.type === 'OVERLAY_INSTALLED') {
+      void refreshOverlayReadiness();
+      markOverlayInstalled();
     }
   });
+
+  // Helper-window jobs the service worker opened on the overlay's behalf. These
+  // run LAST so all the wiring + saved state above is in place first.
+  if (runningInSetup) {
+    void runFolderGrantHelper();
+  } else if (autoInstallLcsc) {
+    void runAutoInstallHelper(autoInstallLcsc);
+  }
+}
+
+// --- Overlay delegation (iframe ↔ service worker ↔ helper window) -------------
+
+/**
+ * Re-read the overlay's library readiness from chrome.storage after a delegated
+ * folder-grant finishes, and refresh the pills/search/install gating. Overlay-
+ * iframe only (it has no real FS handle to restore).
+ */
+async function refreshOverlayReadiness() {
+  try {
+    const stored = await chrome.storage.local.get(OVERLAY_LIB_KEY);
+    overlayLibraryName = typeof stored[OVERLAY_LIB_KEY] === 'string' ? stored[OVERLAY_LIB_KEY] : '';
+  } catch {
+    /* keep the last-known value */
+  }
+  refreshReadiness();
+}
+
+/** Briefly reflect a successful delegated install in the overlay iframe's card. */
+function markOverlayInstalled() {
+  if (current) {
+    installBtn.textContent = 'Installed ✓';
+    installBtn.className = 'btn btn-primary is-done';
+    installBtn.disabled = true;
+    setStatus(installStatus, 'Installed via helper window.', 'success');
+  }
+}
+
+/**
+ * Setup helper window (`?win=1&setup=1`): surface the setup view and focus the
+ * "Choose folder" button so the user grants access in a single click.
+ *
+ * We can't call the picker on load — `showDirectoryPicker` needs a user gesture,
+ * and the gesture that opened this window doesn't carry into it. So the actual
+ * grant happens in `onLibraryAction` (click handler); when it succeeds in setup
+ * mode it records the folder name + finishes the helper (see `afterGrantInHelper`).
+ */
+function runFolderGrantHelper() {
+  setupView.classList.remove('hidden');
+  setStatus(searchStatus, 'Choose your KiCad library folder to finish setup.', 'loading');
+  // Focus the button so a single Enter/click grants the folder.
+  chooseFolderBtn.focus();
+}
+
+/**
+ * Called after a successful folder grant inside a helper window. In pure setup
+ * mode it finishes + closes the helper (the folder name was already recorded to
+ * chrome.storage by the caller). Returns true if it closed the helper.
+ */
+function afterGrantInHelper(handle: FileSystemDirectoryHandle): boolean {
+  if (runningInSetup) {
+    setStatus(searchStatus, `Granted “${handle.name}” ✓`, 'success');
+    void finishHelper('folder');
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Install helper window (`?win=1&install=<lcscId>&bucket=<bucket>`): auto-convert
+ * the part via the relay and write it with the saved folder handle, render the
+ * success state, then self-close — NO extra click when the folder grant is valid.
+ *
+ * If the folder isn't granted / the permission lapsed, `getSavedFolder()` above
+ * returned null; we show the "Choose folder" button (a single click) and, once
+ * granted, the user clicks Install — the converted card is already on screen.
+ */
+async function runAutoInstallHelper(lcscId: string) {
+  // Convert first so the card (and its editable metadata) is on screen whether or
+  // not the folder is ready.
+  await convertAndShow(lcscId, null);
+  if (!current) return; // convert failed — the status already explains why.
+
+  // Honor an explicit destination bucket from the URL (the overlay passes the
+  // user's chosen bucket); otherwise the auto-sorted default from showCard stays.
+  const wantBucket = parseBucket(location.search, LIBRARY_CHOICES);
+  if (wantBucket) bucketSelect.value = wantBucket;
+
+  if (!libraryFolder) {
+    // Permission lapsed / never granted (getSavedFolder couldn't re-grant without
+    // a gesture). The always-visible "Library" pill grants it; clicking it grants
+    // AND — via onLibraryAction's helper-mode branch — proceeds straight to the
+    // install, so it's a single click. The converted card is already on screen.
+    libPill.focus();
+    setStatus(installStatus, 'Click the Library pill to confirm your folder, then it installs.', 'loading');
+    return;
+  }
+
+  // Folder is valid → install immediately, then finish.
+  await onInstall();
+  if (installBtn.classList.contains('is-done')) {
+    void finishHelper('installed');
+  }
+}
+
+/**
+ * Wrap up a helper-window job: tell the SW (which broadcasts to the overlay so it
+ * reflects readiness / "Installed ✓" right away), keep the success state on
+ * screen ~1.2s, then self-close. The SW also closes us after a grace period as a
+ * safety net if `window.close()` is blocked.
+ *
+ * We pass our own window id in the message: `sender.tab` is undefined for a
+ * message sent from a popup-window extension page in MV3, so the SW can't derive
+ * the window to force-close from the sender alone.
+ */
+async function finishHelper(kind: 'folder' | 'installed') {
+  let windowId: number | undefined;
+  try {
+    windowId = (await chrome.windows.getCurrent()).id;
+  } catch {
+    /* not available — the SW just won't have a safety-net close */
+  }
+  try {
+    void chrome.runtime.sendMessage({ type: 'OVERLAY_HELPER_DONE', kind, windowId });
+  } catch {
+    /* SW unreachable — the self-close below still tidies up */
+  }
+  setTimeout(() => {
+    try {
+      window.close();
+    } catch {
+      /* close blocked — the SW's grace-period close handles it */
+    }
+  }, 1200);
 }
 
 // --- Float on top (Document Picture-in-Picture) ------------------------------
@@ -236,6 +416,13 @@ async function init() {
  * hide the button and explain once.
  */
 function setupFloatButton() {
+  // Inside the overlay iframe, or a transient folder-grant / install helper
+  // window: Document PiP is pointless (the overlay already floats; the helper
+  // closes itself). Hide the button and skip the "Floating window" tag.
+  if (runningInOverlay || runningInSetup || autoInstallLcsc) {
+    floatBtn.classList.add('hidden');
+    return;
+  }
   // Running inside the standalone popup window (service worker added `&win=1`):
   // hide Float entirely and surface a subtle "Floating window" tag.
   if (runningInWindow) {
@@ -299,37 +486,88 @@ function toggleSettings(forceOpen?: boolean) {
   }
 }
 
-// --- Open mode (floating window vs. side panel / tab) ------------------------
+// --- Open mode (side panel/tab · floating window · in-page overlay) ----------
+type OpenMode = 'auto' | 'window' | 'overlay';
+
+/** Coerce a stored value to a known open mode (missing/unknown → 'auto'). */
+function normalizeOpenMode(value: unknown): OpenMode {
+  return value === 'window' || value === 'overlay' ? value : 'auto';
+}
+
+/** How THIS document was actually opened (for the "applies next time" note). */
+function currentDocumentMode(): OpenMode {
+  if (runningInOverlay) return 'overlay';
+  if (runningInWindow) return 'window';
+  return 'auto';
+}
+
+/** Check the matching radio in the segmented selector. */
+function selectOpenMode(mode: OpenMode) {
+  const input = openModeSelector.querySelector<HTMLInputElement>(
+    `input[name="openMode"][value="${mode}"]`,
+  );
+  if (input) input.checked = true;
+}
+
 /**
- * Persist the open-mode preference and make the change discoverable. The new mode
+ * Persist the chosen open mode and make the change discoverable. The new mode
  * only takes effect the *next* time the finder is opened (we can't re-home the
- * live document mid-task), so we surface a clear "Applies next time…" note rather
- * than silently doing nothing. The note is shown whenever the chosen mode differs
- * from how THIS document was actually opened.
+ * live document mid-task), so we surface a clear "reopen to apply" note whenever
+ * the choice differs from how THIS document was actually opened.
  */
-async function onOpenModeToggle(windowMode: boolean) {
-  const mode = windowMode ? 'window' : 'auto';
+async function onOpenModeChange(value: string) {
+  const mode = normalizeOpenMode(value);
   try {
     await chrome.storage.local.set({ openMode: mode });
   } catch {
-    /* storage unavailable — keep the in-memory toggle state for this session */
+    /* storage unavailable — keep the in-memory selection for this session */
   }
 
-  // Did the user just pick a mode that differs from the current document's mode?
-  // (Turning ON while in a side panel/tab, or OFF while in the floating window.)
-  const changesCurrent = windowMode !== runningInWindow;
-  windowModeNote.textContent = windowMode
-    ? 'Applies next time you open the finder — reopen it via the toolbar icon to float it.'
-    : 'Applies next time you open the finder.';
+  const changesCurrent = mode !== currentDocumentMode();
+  windowModeNote.textContent =
+    mode === 'overlay'
+      ? 'Reopen the finder via the toolbar icon to show it as an in-page overlay.'
+      : mode === 'window'
+        ? 'Reopen the finder via the toolbar icon to float it in a window.'
+        : 'Reopen the finder via the toolbar icon to apply.';
   windowModeNote.classList.toggle('hidden', !changesCurrent);
 }
 
 // --- Library folder ----------------------------------------------------------
 async function onLibraryAction() {
+  // Overlay iframe: the folder picker is blocked here. Delegate to a real window
+  // via the SW (which opens `?win=1&setup=1`, grants, then broadcasts back).
+  if (runningInOverlay) {
+    try {
+      await chrome.runtime.sendMessage({ type: 'OVERLAY_PICK_FOLDER' });
+      setStatus(searchStatus, 'Opening a window to grant your library folder…', 'loading');
+    } catch {
+      setStatus(searchStatus, 'Could not open the folder-grant window.', 'error');
+    }
+    return;
+  }
+
   try {
     const handle = await pickLibraryFolder();
     libraryFolder = handle;
     refreshReadiness();
+    // Record the folder name for the overlay (which can't hold the FS handle), so
+    // its Library pill reflects readiness no matter where setup happened.
+    try {
+      await chrome.storage.local.set({ [OVERLAY_LIB_KEY]: handle.name });
+    } catch {
+      /* storage unavailable — overlay just won't auto-reflect the new folder */
+    }
+    // In a helper window (setup / install re-confirm), finish the delegated job.
+    if (runningInSetup || autoInstallLcsc) {
+      const closed = afterGrantInHelper(handle);
+      // Install helper: the user re-confirmed the lapsed permission mid-install —
+      // now that the folder's valid, install and finish (notify SW + auto-close).
+      if (!closed && autoInstallLcsc && current) {
+        await onInstall();
+        if (installBtn.classList.contains('is-done')) void finishHelper('installed');
+      }
+    }
   } catch (err) {
     // AbortError = user cancelled the picker — stay quiet.
     if (err instanceof DOMException && err.name === 'AbortError') return;
@@ -360,9 +598,17 @@ async function onRelayUrlChange(value: string) {
 function hasRelay(): boolean {
   return relayUrl.length > 0;
 }
-/** Whether a library folder has been granted (install is possible). */
+/**
+ * Whether a library folder is available for install. In the overlay iframe we
+ * can't hold the FS handle, so readiness is the recorded folder name from
+ * chrome.storage; everywhere else it's the live directory handle.
+ */
 function hasFolder(): boolean {
-  return libraryFolder !== null;
+  return runningInOverlay ? overlayLibraryName.length > 0 : libraryFolder !== null;
+}
+/** The granted library folder's display name (handle name, or the overlay mirror). */
+function folderName(): string {
+  return runningInOverlay ? overlayLibraryName : (libraryFolder?.name ?? '');
 }
 /** Both prerequisites met → the main flow is usable. */
 function isReady(): boolean {
@@ -383,10 +629,11 @@ function openSetupFocusRelay() {
 function refreshReadiness() {
   // --- Library pill ---
   if (hasFolder()) {
+    const name = folderName();
     libPill.classList.add('is-ready');
     libPill.classList.remove('is-missing');
-    setText(libPillValue, libraryFolder!.name);
-    libPill.title = `Library folder: ${libraryFolder!.name} — click to change`;
+    setText(libPillValue, name);
+    libPill.title = `Library folder: ${name} — click to change`;
   } else {
     libPill.classList.remove('is-ready');
     libPill.classList.add('is-missing');
@@ -691,17 +938,41 @@ function safeHttpUrl(value: string): string | null {
 
 // --- Install -----------------------------------------------------------------
 async function onInstall() {
-  // A relay URL is required even at install time — the 3D-model STEP is fetched
-  // through it. (Search/convert already gate on it, so by here it's normally set.)
-  if (!current || !libraryFolder || !hasRelay()) return;
+  if (!current || !hasRelay()) return;
+
+  const bucket = bucketSelect.value as LibraryChoice;
+
+  // Overlay iframe: FS writes are blocked here. Delegate to a real window via the
+  // SW (which opens `?win=1&install=<lcscId>&bucket=<bucket>`, auto-writes against
+  // the saved handle, then closes + broadcasts OVERLAY_INSTALLED back to us).
+  if (runningInOverlay) {
+    const lcscId = current.meta.lcsc;
+    if (!lcscId) {
+      failInstall('Missing LCSC id — re-run the search.');
+      return;
+    }
+    installBtn.disabled = true;
+    installBtn.textContent = 'Installing in a window…';
+    installBtn.className = 'btn btn-primary is-busy';
+    hide(successPanel);
+    setStatus(installStatus, 'A helper window is writing the files…', 'loading');
+    try {
+      await chrome.runtime.sendMessage({ type: 'OVERLAY_INSTALL', lcscId, bucket });
+    } catch {
+      failInstall('Could not open the install window.');
+    }
+    return;
+  }
+
+  // Top-level document: write directly via File System Access. A relay URL is
+  // required even here — the 3D-model STEP is fetched through it.
+  if (!libraryFolder) return;
 
   installBtn.disabled = true;
   installBtn.textContent = 'Installing…';
   installBtn.className = 'btn btn-primary is-busy';
   hide(installStatus);
   hide(successPanel);
-
-  const bucket = bucketSelect.value as LibraryChoice;
 
   let res: InstallPartResult;
   try {
@@ -824,10 +1095,12 @@ function createSourceLink(link: { name: string; url: string; description: string
 function refreshInstallEnabled() {
   // Don't override the terminal success state's disabled button.
   if (installBtn.classList.contains('is-done')) return;
-  installBtn.disabled = !(libraryFolder && current && hasRelay());
+  // Overlay mode gates on the recorded folder (hasFolder()) since the iframe
+  // holds no FS handle; top-level modes gate on the live handle.
+  installBtn.disabled = !(hasFolder() && current && hasRelay());
   installBtn.title = !hasRelay()
     ? 'Set your relay URL first.'
-    : libraryFolder
+    : hasFolder()
       ? ''
       : 'Choose a library folder first.';
 }

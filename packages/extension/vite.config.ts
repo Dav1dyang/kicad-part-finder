@@ -11,6 +11,12 @@ export default defineConfig({
         'content/digikey': resolve(__dirname, 'src/content/digikey.ts'),
         'content/lcsc': resolve(__dirname, 'src/content/lcsc.ts'),
         'content/selection-listener': resolve(__dirname, 'src/content/selection-listener.ts'),
+        // In-page overlay content script (injected via executeScript). Must be a
+        // SELF-CONTAINED classic script: its only helper (overlay-bounds.ts) is
+        // imported by NO other entry, so rollup inlines it here instead of
+        // splitting a chunk the classic content script couldn't import. (The
+        // side-panel's overlay params live in the separate overlay-params.ts.)
+        'content/overlay': resolve(__dirname, 'src/content/overlay.ts'),
         'background/service-worker': resolve(__dirname, 'src/background/service-worker.ts'),
         'sidepanel/sidepanel': resolve(__dirname, 'src/sidepanel/index.html'),
       },

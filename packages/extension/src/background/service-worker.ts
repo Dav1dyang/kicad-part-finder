@@ -5,10 +5,16 @@
  * panel's "Float on top" (Document Picture-in-Picture) works from there. A
  * standalone popup window is kept as a fallback if a tab can't be created.
  *
- * The `openMode` setting (chrome.storage.local) lets the user override that: in
- * 'window' mode the UI opens directly in a standalone popup window — which, unlike
- * Document PiP, PERSISTS across tab/app switches in Arc (Arc drops the PiP window
- * on tab-return). 'auto' (default / missing) keeps the side-panel-or-tab behavior.
+ * The `openMode` setting (chrome.storage.local) lets the user override that:
+ *  - 'window'  → the UI opens directly in a standalone popup window — which, unlike
+ *    Document PiP, PERSISTS across tab/app switches in Arc (Arc drops the PiP
+ *    window on tab-return).
+ *  - 'overlay' → a draggable in-page overlay is injected onto the current page
+ *    (content/overlay.js). The overlay hosts the UI in an iframe; File System
+ *    Access can't run in that cross-origin iframe, so the overlay delegates
+ *    folder-pick + install to a real popup window via OVERLAY_PICK_FOLDER /
+ *    OVERLAY_INSTALL messages handled here.
+ *  - 'auto' (default / missing) keeps the side-panel-or-tab behavior.
  *
  * Injects a text selection listener when the UI is active so highlighting text
  * on any page triggers a component search.
@@ -27,6 +33,14 @@ let finderWindowId: number | null = null;
 // Id of the finder TAB (no-sidePanel browsers), if one is currently open. A tab
 // is preferred over the popup window so Document PiP "Float on top" can be used.
 let finderTabId: number | null = null;
+// Ids of short-lived helper windows opened on the overlay's behalf to run File
+// System Access (folder grant / install) — tracked so we can close them when the
+// work finishes and stop tracking them when the user closes them manually.
+const helperWindowIds = new Set<number>();
+// Grace period before the SW force-closes a finished helper window. The helper
+// shows its success state + self-closes (~1.2s); this is only a safety net for
+// contexts where window.close() is blocked. Slightly longer than the self-close.
+const HELPER_CLOSE_GRACE_MS = 1800;
 
 // The side-panel UI document, reused as the tab / popup-window fallback. Loadable
 // via chrome.runtime.getURL — extension pages are always reachable by the
@@ -52,12 +66,16 @@ async function getRelayUrl(): Promise<string> {
 const NO_RELAY_ERROR = 'relay URL not set';
 
 /**
- * How the finder should open. 'auto' = current behavior (side panel where
- * supported, else a tab so Document PiP can float). 'window' = a standalone popup
- * window that stays open across tab/app switches (best for Arc, where PiP gets
- * dropped on tab-return). Stored in chrome.storage.local under `openMode`.
+ * How the finder should open. Stored in chrome.storage.local under `openMode`:
+ *  - 'auto'    — current behavior (side panel where supported, else a tab so
+ *                Document PiP can float).
+ *  - 'window'  — a standalone popup window that stays open across tab/app
+ *                switches (best for Arc, where PiP gets dropped on tab-return).
+ *  - 'overlay' — a draggable in-page overlay injected onto the current page
+ *                (v1-style float). FS-Access can't run in the overlay's iframe,
+ *                so folder-pick + install are delegated to a real window.
  */
-type OpenMode = 'auto' | 'window';
+type OpenMode = 'auto' | 'window' | 'overlay';
 
 /**
  * Read the user's open-mode preference. Treats a missing/empty/unknown value as
@@ -67,7 +85,9 @@ type OpenMode = 'auto' | 'window';
 async function getOpenMode(): Promise<OpenMode> {
   try {
     const { openMode } = await chrome.storage.local.get('openMode');
-    return openMode === 'window' ? 'window' : 'auto';
+    if (openMode === 'window') return 'window';
+    if (openMode === 'overlay') return 'overlay';
+    return 'auto';
   } catch {
     return 'auto';
   }
@@ -181,6 +201,65 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async
   }
 
+  // --- In-page overlay → window delegation ----------------------------------
+  // File System Access (showDirectoryPicker + writes) is blocked inside the
+  // overlay's cross-origin iframe, so the overlay UI asks us to open a REAL
+  // popup window (a top-level extension document) to do the FS work.
+
+  // Overlay asking to grant the library folder: open a one-time setup window.
+  if (message.type === 'OVERLAY_PICK_FOLDER') {
+    void openHelperWindow(`&setup=1`);
+    sendResponse({ ok: true });
+    return false; // answered synchronously
+  }
+
+  // Overlay asking to install a part: open an install window that auto-converts
+  // + writes against the saved folder handle, then closes itself.
+  if (message.type === 'OVERLAY_INSTALL' && typeof message.lcscId === 'string') {
+    const lcsc = encodeURIComponent(message.lcscId);
+    const bucket = typeof message.bucket === 'string' && message.bucket
+      ? `&bucket=${encodeURIComponent(message.bucket)}`
+      : '';
+    void openHelperWindow(`&install=${lcsc}${bucket}`);
+    sendResponse({ ok: true });
+    return false; // answered synchronously
+  }
+
+  // The overlay's iframe was blocked (strict host-page CSP frame-src) — the user
+  // chose to open the finder in a normal popup window instead.
+  if (message.type === 'OVERLAY_FALLBACK_WINDOW') {
+    const tabId = sender.tab?.id;
+    if (typeof tabId === 'number') void openFinderWindow(tabId);
+    else void chrome.tabs.query({ active: true, currentWindow: true }).then(([t]) => {
+      if (typeof t?.id === 'number') void openFinderWindow(t.id);
+    });
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  // The helper window (setup / install) finished its FS work. Broadcast right away
+  // so the overlay reflects readiness / the install, but let the helper keep its
+  // success state visible and self-close (~1.2s); only force-close it after a
+  // grace period as a safety net if window.close() was blocked.
+  if (message.type === 'OVERLAY_HELPER_DONE') {
+    // `sender.tab` is undefined for a popup-window extension page in MV3, so the
+    // helper passes its own window id in the message; fall back to sender.tab just
+    // in case.
+    const winId = typeof message.windowId === 'number' ? message.windowId : sender.tab?.windowId;
+    if (typeof winId === 'number') {
+      setTimeout(() => void closeHelperWindow(winId), HELPER_CLOSE_GRACE_MS);
+    }
+    // Re-broadcast a simplified signal for both the overlay content script and
+    // the overlay iframe to react to (folder ready / installed).
+    const outgoing = message.kind === 'installed'
+      ? { type: 'OVERLAY_INSTALLED' }
+      : { type: 'OVERLAY_FOLDER_READY' };
+    chrome.runtime.sendMessage(outgoing).catch(() => {
+      /* no listeners (overlay closed) — ignore */
+    });
+    return false;
+  }
+
   return false;
 });
 
@@ -208,7 +287,15 @@ async function openFinder(tab?: chrome.tabs.Tab) {
 
   const openMode = await getOpenMode();
 
-  if (openMode === 'window') {
+  if (openMode === 'overlay') {
+    // Explicit overlay mode → inject the in-page overlay onto the active tab. On
+    // restricted pages (chrome://, the extensions page, the Web Store) injection
+    // throws — fall back to a popup window so the icon never dead-ends.
+    const injected = await injectOverlay(tabId);
+    if (!injected) {
+      await openFinderWindow(tabId);
+    }
+  } else if (openMode === 'window') {
     // Explicit window mode → go straight to the standalone popup window, which
     // survives tab/app switches (unlike side panel / Document PiP in Arc).
     await openFinderWindow(tabId);
@@ -347,6 +434,65 @@ async function injectSelectionListener(tabId: number) {
   }
 }
 
+/**
+ * Inject the in-page overlay onto the given tab. Re-injecting toggles the
+ * existing overlay's visibility (the script's own re-injection guard), so this is
+ * safe to call repeatedly from the toolbar icon.
+ *
+ * Returns false if injection is impossible (restricted page: chrome://, the
+ * extensions page, the Web Store, a PDF viewer, etc.) so the caller can fall back
+ * to a popup window and the icon never dead-ends.
+ */
+async function injectOverlay(tabId: number): Promise<boolean> {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['content/overlay.js'],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Open a short-lived top-level extension window to run File System Access on the
+ * overlay's behalf (the overlay's iframe can't). `extraQuery` selects the job:
+ *   `&setup=1`                         → one-time folder grant, then close.
+ *   `&install=<lcscId>[&bucket=<b>]`   → auto convert + install, then close.
+ *
+ * `&win=1` keeps the side-panel UI in its window/overlay-helper code path (hides
+ * the Float button, reads the detected part from `?tab=` rather than the active
+ * tab). A fresh window is opened per request so concurrent jobs don't collide;
+ * each closes itself when done (and we close it from OVERLAY_HELPER_DONE too).
+ */
+async function openHelperWindow(extraQuery: string) {
+  const url = `${chrome.runtime.getURL(SIDEPANEL_PATH)}?win=1${extraQuery}`;
+  try {
+    const win = await chrome.windows.create({
+      type: 'popup',
+      width: 460,
+      height: 720,
+      url,
+      focused: true,
+    });
+    if (typeof win?.id === 'number') helperWindowIds.add(win.id);
+  } catch (err) {
+    console.error('Failed to open overlay helper window:', err);
+  }
+}
+
+/** Close a helper window once its FS-Access job reports done. */
+async function closeHelperWindow(windowId: number) {
+  if (!helperWindowIds.has(windowId)) return;
+  helperWindowIds.delete(windowId);
+  try {
+    await chrome.windows.remove(windowId);
+  } catch {
+    // Already closed itself (window.close()) — nothing to do.
+  }
+}
+
 // Clean up when tabs close
 chrome.tabs.onRemoved.addListener((tabId) => {
   detectedParts.delete(tabId);
@@ -356,9 +502,11 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   if (tabId === finderTabId) finderTabId = null;
 });
 
-// Stop tracking the finder popup window once it's closed.
+// Stop tracking the finder popup window (and any overlay helper window) once
+// it's closed — whether we closed it or the user did.
 chrome.windows.onRemoved.addListener((windowId) => {
   if (windowId === finderWindowId) finderWindowId = null;
+  helperWindowIds.delete(windowId);
 });
 
 // When tab navigates to a new page, re-inject selection listener if it was active

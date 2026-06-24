@@ -75,10 +75,12 @@
   },
   "web_accessible_resources": [
     {
+      "comment": "The finder UI loaded as an <iframe> by the in-page overlay (and the v1 float). index.html is the framed page; the JS/CSS/three.js chunks are its sub-resources (same-origin to the framed extension doc, listed defensively so the framed 3D preview loads on any host page).",
       "resources": [
         "src/sidepanel/index.html",
         "sidepanel/sidepanel.js",
-        "sidepanel/sidepanel.css"
+        "sidepanel/sidepanel.css",
+        "chunks/*.js"
       ],
       "matches": [
         "<all_urls>"

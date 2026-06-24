@@ -301,76 +301,92 @@ body {
   animation: drop-in 0.18s ease both;
 }
 
-/* Open-mode toggle — sits under the relay field, separated by a hairline so it
-   reads as its own setting without feeling bolted on. */
-.setting-toggle {
+/* Open-mode selector — sits under the relay field, separated by a hairline so it
+   reads as its own setting without feeling bolted on. A 3-way segmented control:
+   side panel/tab · floating window · in-page overlay. */
+.setting-block {
   margin-top: 10px;
   padding-top: 12px;
   border-top: 1px solid var(--line);
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 8px;
 }
 
-/* A row: switch on the left, label + hint stacked on the right. */
-.toggle {
+/* The segmented control: stacked rows that read like a radio list but feel like
+   one connected control (shared surface, hairline dividers). */
+.segmented {
   display: flex;
-  align-items: flex-start;
-  gap: 11px;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-1);
+  overflow: hidden;
+}
+
+/* Each option: the native radio drives state + focus + a11y, visually hidden. */
+.segment {
+  position: relative;
+  display: flex;
   cursor: pointer;
   user-select: none;
+  border-top: 1px solid var(--line);
 }
+.segment:first-child { border-top: none; }
 
-/* The native checkbox is visually hidden but still drives state + focus + a11y. */
-.toggle-input {
+.segment-input {
   position: absolute;
   opacity: 0;
   width: 0;
   height: 0;
 }
 
-/* Track: an inset pill in the same surface family as the fields/pills. */
-.toggle-track {
-  position: relative;
-  flex-shrink: 0;
-  width: 34px;
-  height: 20px;
-  margin-top: 1px;
-  border-radius: 999px;
-  background: var(--surface-3);
-  border: 1px solid var(--line-strong);
-  transition: background 0.16s ease, border-color 0.16s ease;
+/* The visible face: title + hint stacked, with room on the left for the tick. */
+.segment-face {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 9px 12px 9px 32px;
+  transition: background 0.14s ease;
 }
-.toggle-thumb {
+.segment-face::before {
+  content: '';
   position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 14px;
-  height: 14px;
+  left: 12px;
+  top: 12px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
-  background: var(--text-dim);
-  transition: transform 0.16s ease, background 0.16s ease;
+  border: 1.5px solid var(--line-strong);
+  background: var(--surface-3);
+  transition: border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
 }
+.segment-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.segment-hint { font-size: 11px; line-height: 1.45; color: var(--text-faint); }
 
-/* On: lit in the one accent, thumb slides over — matches the "ready/go" language. */
-.toggle-input:checked + .toggle-track {
+.segment:hover .segment-face { background: var(--surface-2); }
+.segment:hover .segment-face::before { border-color: var(--line-strong); }
+
+/* Selected: accent-washed row + a filled accent dot. */
+.segment-input:checked ~ .segment-face {
   background: var(--accent-wash);
-  border-color: var(--accent-edge);
 }
-.toggle-input:checked + .toggle-track .toggle-thumb {
+.segment-input:checked ~ .segment-face::before {
+  border-color: var(--accent);
   background: var(--accent);
-  transform: translateX(14px);
+  box-shadow: inset 0 0 0 2px var(--surface-1);
+}
+.segment-input:checked ~ .segment-face .segment-title { color: var(--accent-ink); }
+
+.segment-input:focus-visible ~ .segment-face {
+  outline: none;
+  box-shadow: var(--ring);
+  border-radius: 8px;
 }
 
-.toggle:hover .toggle-track { border-color: var(--line-strong); }
-.toggle:hover .toggle-input:checked + .toggle-track { border-color: var(--accent-edge); }
-.toggle-input:focus-visible + .toggle-track { outline: none; box-shadow: var(--ring); }
-
-.toggle-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.toggle-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
-.toggle-hint { font-size: 11px; line-height: 1.45; color: var(--text-faint); }
-
-/* "Applies next time…" confirmation after flipping the switch. */
+/* "Reopen to apply…" confirmation after changing the mode. */
 .setting-note {
   font-size: 11px;
   line-height: 1.45;
@@ -378,7 +394,6 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding-left: 45px; /* align under the label, clear of the 34px track + gap */
 }
 .setting-note::before {
   content: '✓';
