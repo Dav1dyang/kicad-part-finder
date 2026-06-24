@@ -146,6 +146,21 @@ export function mount3dPreview(
 }
 
 /**
+ * EasyEDA inlines its .mtl material library inside the .obj, but three's
+ * OBJLoader expects materials in a separate file and logs a "THREE.OBJLoader:
+ * Unexpected line" warning for every material row (newmtl/Ka/Kd/Ks/…). We swap
+ * in one metallic material anyway (see buildScene), so strip the inlined-mtl
+ * lines before parsing to keep the console — and the extension errors page — clean.
+ */
+const MTL_LINE = /^\s*(newmtl|Ka|Kd|Ks|Ke|Ns|Ni|d|Tr|Tf|illum|mtllib|usemtl|map_\w+|bump|disp|decal|refl)\b/;
+function stripInlinedMtl(objText: string): string {
+  return objText
+    .split('\n')
+    .filter((line) => !MTL_LINE.test(line))
+    .join('\n');
+}
+
+/**
  * Build the three.js scene for a parsed OBJ and start the render loop. Returns a
  * teardown fn. Separated out so {@link mount3dPreview} stays about flow/states.
  */
@@ -155,7 +170,7 @@ function buildScene(
   container: HTMLElement,
   objText: string,
 ): () => void {
-  const obj = new OBJLoader().parse(objText);
+  const obj = new OBJLoader().parse(stripInlinedMtl(objText));
 
   // Replace EasyEDA's materials with one calm metallic so it reads on the dark
   // surface regardless of what the OBJ declared (its mtl is inlined/odd).
