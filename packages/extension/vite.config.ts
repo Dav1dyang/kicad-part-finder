@@ -37,6 +37,20 @@ export default defineConfig({
   },
   plugins: [
     {
+      name: 'iife-wrap-overlay-content',
+      // content/overlay.js is re-injected via executeScript; rollup emits its
+      // inlined helper consts (OVERLAY_MIN_WIDTH, etc.) and the static markup/CSS
+      // at top level, which redeclare on the 2nd injection ("Identifier already
+      // declared"). Wrap the whole chunk in an IIFE so every binding is function-
+      // scoped; re-running just re-enters the __kicadOverlayActive guard (toggle).
+      renderChunk(code, chunk) {
+        if (chunk.fileName === 'content/overlay.js') {
+          return { code: '(() => {\n' + code + '\n})();\n', map: null };
+        }
+        return null;
+      },
+    },
+    {
       name: 'copy-extension-assets',
       closeBundle() {
         // Copy the extension manifest and icons to dist. (The relay replaces the
