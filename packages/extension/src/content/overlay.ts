@@ -38,7 +38,7 @@ import {
 const PANEL_HTML = `
   <div class="ov-header">
     <span class="ov-grip" aria-hidden="true">⋮⋮</span>
-    <span class="ov-title" data-pulse="">KiCad Part Finder</span>
+    <span class="ov-title">KiCad Part Finder</span>
     <span class="ov-spacer"></span>
     <button class="ov-btn ov-min" type="button" title="Minimize" aria-label="Minimize">—</button>
     <button class="ov-btn ov-close" type="button" title="Close" aria-label="Close">×</button>
@@ -94,16 +94,6 @@ const OVERLAY_CSS = `
     overflow: hidden;
     text-overflow: ellipsis;
     letter-spacing: 0.1px;
-  }
-  .ov-title.is-pulsing::after {
-    content: attr(data-pulse);
-    margin-left: 8px;
-    padding: 1px 7px;
-    border-radius: 999px;
-    background: rgba(34, 197, 94, 0.16);
-    color: #4ade80;
-    font-size: 11px;
-    font-weight: 600;
   }
   .ov-spacer { flex: 1 1 auto; }
 
@@ -225,7 +215,6 @@ const OVERLAY_CSS = `
 
   // --- Element refs ----------------------------------------------------------
   const headerEl = panel.querySelector('.ov-header') as HTMLElement;
-  const titleEl = panel.querySelector('.ov-title') as HTMLElement;
   const minBtn = panel.querySelector('.ov-min') as HTMLButtonElement;
   const closeBtn = panel.querySelector('.ov-close') as HTMLButtonElement;
   const bodyEl = panel.querySelector('.ov-body') as HTMLElement;
@@ -423,8 +412,6 @@ const OVERLAY_CSS = `
   /** Tear everything down cleanly and release the re-injection guard. */
   function teardown() {
     window.removeEventListener('resize', reclamp);
-    chrome.runtime.onMessage.removeListener(onRuntimeMessage);
-    if (pulseTimer) clearTimeout(pulseTimer);
     clearTimeout(frameWatchdog);
     try {
       host.remove();
@@ -434,32 +421,12 @@ const OVERLAY_CSS = `
     delete w[FLAG];
   }
 
-  // --- SW broadcasts ---------------------------------------------------------
-  // The service worker broadcasts when the delegated folder-grant / install
-  // window finishes so the overlay iframe can refresh readiness / success. The
-  // iframe listens for these itself (it's an extension page), so the content
-  // script only needs to surface a tiny "installed" pulse on the header for
-  // feedback even if the iframe is mid-scroll.
-  function onRuntimeMessage(message: unknown) {
-    const m = message as { type?: string } | null;
-    if (!m || typeof m !== 'object') return;
-    if (m.type === 'OVERLAY_INSTALLED') {
-      pulseTitle('Installed ✓');
-    } else if (m.type === 'OVERLAY_FOLDER_READY') {
-      pulseTitle('Folder ready');
-    }
-  }
-
-  let pulseTimer: ReturnType<typeof setTimeout> | null = null;
-  function pulseTitle(text: string) {
-    titleEl.dataset.pulse = text;
-    titleEl.classList.add('is-pulsing');
-    if (pulseTimer) clearTimeout(pulseTimer);
-    pulseTimer = setTimeout(() => {
-      titleEl.classList.remove('is-pulsing');
-      delete titleEl.dataset.pulse;
-    }, 1800);
-  }
+  // Note: the SW broadcasts (OVERLAY_INSTALLED / OVERLAY_FOLDER_READY / …) when a
+  // delegated helper window finishes, but those go via chrome.runtime.sendMessage,
+  // which does NOT reach content scripts — only extension pages. The overlay's
+  // iframe IS an extension page and handles them itself (refresh readiness /
+  // success / failure), so the content script needs no message listener here. (A
+  // previous header "pulse" listener was dead code — it could never fire.)
 
   // --- Wire up listeners -----------------------------------------------------
   headerEl.addEventListener('pointerdown', onHeaderPointerDown);
@@ -481,7 +448,6 @@ const OVERLAY_CSS = `
   closeBtn.addEventListener('click', teardown);
 
   window.addEventListener('resize', reclamp);
-  chrome.runtime.onMessage.addListener(onRuntimeMessage);
 
   // Expose the toggle so a re-injection toggles visibility instead of stacking.
   w[FLAG] = { toggle: toggleVisibility };

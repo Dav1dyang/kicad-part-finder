@@ -174,9 +174,13 @@ async function init() {
 
   // --- Settings disclosure ---
   settingsBtn.addEventListener('click', () => toggleSettings());
-  // Keep the two relay inputs (settings + setup) mirrored and persisted.
-  relayUrlInput.addEventListener('input', () => void onRelayUrlChange(relayUrlInput.value));
-  relayUrlInputSetup.addEventListener('input', () => void onRelayUrlChange(relayUrlInputSetup.value));
+  // Keep the two relay inputs (settings + setup) mirrored and persisted. Persist
+  // live on input (without rewriting the field being typed in — that jumps the
+  // caret + strips trailing spaces mid-type); normalize the displayed value on blur.
+  relayUrlInput.addEventListener('input', () => void onRelayUrlChange(relayUrlInput.value, relayUrlInput));
+  relayUrlInputSetup.addEventListener('input', () => void onRelayUrlChange(relayUrlInputSetup.value, relayUrlInputSetup));
+  relayUrlInput.addEventListener('blur', () => normalizeRelayInput(relayUrlInput));
+  relayUrlInputSetup.addEventListener('blur', () => normalizeRelayInput(relayUrlInputSetup));
   // Open-mode selector: side panel/tab (auto) · floating window · in-page overlay.
   openModeSelector.addEventListener('change', (e) => {
     const target = e.target as HTMLInputElement;
@@ -671,18 +675,31 @@ async function onLibraryAction() {
 }
 
 // --- Relay URL ---------------------------------------------------------------
-/** Persist the edited relay URL to chrome.storage.local and refresh UI state. */
-async function onRelayUrlChange(value: string) {
+/**
+ * Persist the edited relay URL to chrome.storage.local and refresh UI state, on
+ * every keystroke. We DON'T rewrite the `source` input the user is typing in —
+ * doing so on each input event stripped a trailing space mid-type and jumped the
+ * caret to the end. Normalization (trim) of the *displayed* value happens only on
+ * blur (see `normalizeRelayInput`). The OTHER (mirror) input is safe to overwrite
+ * since the user isn't editing it.
+ */
+async function onRelayUrlChange(value: string, source: HTMLInputElement) {
   relayUrl = value.trim();
-  // Mirror across both inputs so settings and setup never disagree.
-  if (relayUrlInput.value !== relayUrl) relayUrlInput.value = relayUrl;
-  if (relayUrlInputSetup.value !== relayUrl) relayUrlInputSetup.value = relayUrl;
+  // Mirror the trimmed value into the OTHER input so settings and setup agree,
+  // but leave the input being typed in untouched (no caret jump / space-strip).
+  const mirror = source === relayUrlInput ? relayUrlInputSetup : relayUrlInput;
+  if (mirror.value !== relayUrl) mirror.value = relayUrl;
   refreshReadiness();
   try {
     await chrome.storage.local.set({ relayUrl });
   } catch {
     /* storage unavailable — keep the in-memory value so the session still works */
   }
+}
+
+/** On blur, normalize an input's displayed value to the trimmed relay URL. */
+function normalizeRelayInput(input: HTMLInputElement) {
+  if (input.value !== relayUrl) input.value = relayUrl;
 }
 
 /** Whether a relay URL has been configured (search/convert is possible). */

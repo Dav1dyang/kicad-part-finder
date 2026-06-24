@@ -45,7 +45,11 @@ export default defineConfig({
       // scoped; re-running just re-enters the __kicadOverlayActive guard (toggle).
       renderChunk(code, chunk) {
         if (chunk.fileName === 'content/overlay.js') {
-          return { code: '(() => {\n' + code + '\n})();\n', map: null };
+          // Prepend the IIFE opener on the SAME first line (no leading newline)
+          // and append the closer AFTER the existing code so every original line
+          // keeps its line number — the generated sourcemap then still aligns.
+          // (A leading `\n` shifted the whole overlay map down by one line.)
+          return { code: '(() => {' + code + '\n})();\n', map: null };
         }
         return null;
       },
