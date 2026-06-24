@@ -121,6 +121,27 @@
       </header>
 
       <div class="card-body">
+        <!-- Preview: Symbol · Footprint · 3D. Each tab's preview is rendered
+             lazily on first activation (3D only loads three.js when opened). -->
+        <section class="preview" aria-label="Previews">
+          <div class="preview-tabs" role="tablist" aria-label="Preview type">
+            <button id="previewTabSymbol" class="preview-tab is-active" role="tab" type="button"
+                    aria-selected="true" aria-controls="previewPaneSymbol" data-preview="symbol">Symbol</button>
+            <button id="previewTabFootprint" class="preview-tab" role="tab" type="button"
+                    aria-selected="false" aria-controls="previewPaneFootprint" data-preview="footprint">Footprint</button>
+            <button id="previewTab3d" class="preview-tab" role="tab" type="button"
+                    aria-selected="false" aria-controls="previewPane3d" data-preview="3d">3D</button>
+          </div>
+          <div class="preview-stage">
+            <div id="previewPaneSymbol" class="preview-pane is-active" role="tabpanel"
+                 aria-labelledby="previewTabSymbol"></div>
+            <div id="previewPaneFootprint" class="preview-pane" role="tabpanel"
+                 aria-labelledby="previewTabFootprint" hidden></div>
+            <div id="previewPane3d" class="preview-pane preview-pane--3d" role="tabpanel"
+                 aria-labelledby="previewTab3d" hidden></div>
+          </div>
+        </section>
+
         <div class="field">
           <label class="micro-label" for="fieldMpn">MPN <span class="flag hidden" id="flagMpn">confirm</span></label>
           <input id="fieldMpn" class="text-input mono" type="text" />

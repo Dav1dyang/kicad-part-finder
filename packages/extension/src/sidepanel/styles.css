@@ -745,6 +745,112 @@ code {
   gap: 12px;
 }
 
+/* ---------------------------------------------------------------------------
+   Preview block — segmented Symbol · Footprint · 3D, an inset "viewport".
+   ------------------------------------------------------------------------- */
+.preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Segmented control: one pill-track holding three equal tabs. */
+.preview-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.preview-tab {
+  appearance: none;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  padding: 6px 4px;
+  cursor: pointer;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+.preview-tab:hover { color: var(--text); background: var(--surface-3); }
+.preview-tab:focus-visible { outline: none; box-shadow: var(--ring); }
+.preview-tab.is-active {
+  background: var(--accent-wash);
+  color: var(--accent-ink);
+  box-shadow: inset 0 0 0 1px var(--accent-edge);
+}
+
+/* The viewport that holds the active preview. Fixed-ish height so the card
+   doesn't jump as you switch tabs; a faint grid hints at "drawing canvas". */
+.preview-stage {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background:
+    radial-gradient(120% 90% at 50% 0%, color-mix(in oklab, var(--accent) 5%, transparent), transparent 60%),
+    linear-gradient(var(--line) 1px, transparent 1px) 0 0 / 100% 12px,
+    linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0 / 12px 100%,
+    var(--bg);
+  overflow: hidden;
+  min-height: 168px;
+}
+.preview-pane {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+}
+.preview-pane[hidden] { display: none; }
+
+/* The fitted SVG fills the stage; identifier text in it uses the mono face. */
+.preview-svg {
+  width: 100%;
+  height: 100%;
+  max-height: 148px;
+  display: block;
+}
+.preview-svg text { font-family: var(--font-mono); }
+.fp-pad-label { font-weight: 700; }
+.sym-pin-name { font-family: var(--font-ui); font-weight: 600; }
+.sym-pin-number { font-family: var(--font-mono); }
+
+/* 3D pane stretches to fill so the canvas can size to it. */
+.preview-pane--3d { padding: 0; }
+.preview-3d-canvas { width: 100%; height: 100%; display: block; cursor: grab; }
+.preview-3d-canvas:active { cursor: grabbing; }
+
+/* Empty / loading / error states inside a preview pane. */
+.preview-unavailable,
+.preview-3d-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  text-align: center;
+  padding: 8px;
+}
+.preview-3d-glyph { font-size: 20px; line-height: 1; color: var(--text-faint); }
+.preview-3d-status--error .preview-3d-glyph,
+.preview-3d-status--error .preview-3d-msg { color: var(--warn); }
+.preview-3d-spinner {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--accent);
+  animation: spin 0.7s linear infinite;
+}
+
 .datasheet-field { display: flex; gap: 8px; align-items: stretch; }
 .datasheet-field .text-input { flex: 1; min-width: 0; }
 .datasheet-open {

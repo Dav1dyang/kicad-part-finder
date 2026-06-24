@@ -13,6 +13,7 @@
  *   GET /jlcpcb/search?keyword=X     -> JLCPCB SMT component search (JSON verbatim)
  *   GET /easyeda/component?lcsc=C123 -> EasyEDA component JSON (verbatim)
  *   GET /easyeda/model?uuid=HEX      -> EasyEDA STEP model bytes (streamed)
+ *   GET /easyeda/model-obj?uuid=HEX  -> EasyEDA OBJ 3D model text (for previews)
  *   GET /                            -> "kicad-part-relay ok" (text/plain)
  *
  * No bindings, no secrets, no state — a pure stateless proxy.
@@ -192,6 +193,54 @@ export async function handleEasyedaModel(url: URL): Promise<Response> {
   });
 }
 
+/**
+ * GET /easyeda/model-obj?uuid=HEX
+ *
+ * Server-side GET of EasyEDA's OBJ 3D-model store (a DIFFERENT store than the
+ * STEP one above: `/3dmodel/{uuid}` vs `/qAxj…/{uuid}`). Returns the OBJ as text
+ * so the side panel can render a lightweight three.js preview without the heavy
+ * STEP→mesh decode the install path needs. Validates uuid is hex.
+ *
+ * The upstream serves the OBJ with `Content-Type: application/octet-stream`, so
+ * we normalize it to `text/plain` for the browser fetch — the bytes are the
+ * same verbatim OBJ text either way.
+ */
+export async function handleEasyedaModelObj(url: URL): Promise<Response> {
+  const uuid = url.searchParams.get('uuid') ?? '';
+  if (!HEX_RE.test(uuid)) {
+    return upstreamError(`invalid uuid: "${uuid}" (expected hex)`, 400);
+  }
+
+  const endpoint = `https://modules.easyeda.com/3dmodel/${uuid}`;
+
+  let resp: Response;
+  try {
+    resp = await fetch(endpoint, {
+      headers: {
+        'User-Agent': DESKTOP_UA,
+        Referer: 'https://easyeda.com/',
+      },
+    });
+  } catch (err) {
+    return upstreamError(
+      `easyeda model-obj fetch failed: ${err instanceof Error ? err.message : String(err)}`,
+      502,
+    );
+  }
+
+  if (!resp.ok) {
+    return upstreamError(`easyeda model-obj upstream HTTP ${resp.status}`, resp.status);
+  }
+
+  // Return the OBJ text verbatim with a text content-type (the upstream sends
+  // octet-stream). Read as text so CORS + content-type are unambiguous.
+  const body = await resp.text();
+  return new Response(body, {
+    status: 200,
+    headers: { 'Content-Type': 'text/plain; charset=utf-8', ...CORS_HEADERS },
+  });
+}
+
 export default {
   async fetch(request: Request, _env: unknown): Promise<Response> {
     // CORS preflight — answer every OPTIONS with 204 + permissive headers.
@@ -219,6 +268,8 @@ export default {
           return await handleEasyedaComponent(url);
         case '/easyeda/model':
           return await handleEasyedaModel(url);
+        case '/easyeda/model-obj':
+          return await handleEasyedaModelObj(url);
         default:
           return upstreamError(`not found: ${url.pathname}`, 404);
       }

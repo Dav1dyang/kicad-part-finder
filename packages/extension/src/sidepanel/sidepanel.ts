@@ -34,6 +34,7 @@ import {
 import { getSecondarySourceLinks } from '../lib/mpn-sources.js';
 import { parseSourceTabId } from './source-tab.js';
 import { isPipSupported, floatOnTop, type FloatHandle } from './float.js';
+import { createPreviewController, type PreviewController } from './preview-controller.js';
 
 // --- DOM ---------------------------------------------------------------------
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -109,6 +110,8 @@ let relayUrl = '';
 let detectDebounce: ReturnType<typeof setTimeout> | null = null;
 // Active Document PiP float, if any.
 let floatHandle: FloatHandle | null = null;
+// Symbol/Footprint/3D preview block in the result card (lazy per-tab render).
+let preview: PreviewController | null = null;
 
 // --- Init --------------------------------------------------------------------
 async function init() {
@@ -149,6 +152,9 @@ async function init() {
   // --- Install ---
   installBtn.addEventListener('click', () => void onInstall());
   installAnotherBtn.addEventListener('click', resetForAnother);
+
+  // --- Previews (Symbol · Footprint · 3D) ---
+  preview = createPreviewController(partCard);
 
   // --- Float on top (Document PiP) ---
   setupFloatButton();
@@ -402,6 +408,8 @@ async function runSearch(query: string) {
   hide(candidateSection);
   hide(partCard);
   hide(secondarySources);
+  // Tear down the previous part's previews (stops any 3D scene + frees WebGL).
+  preview?.reset();
   current = null;
   candidates = [];
 
@@ -550,6 +558,10 @@ function showCard(result: ConvertResult, match: JlcMatch | null) {
 
   // 3D model status indicator.
   setAssetState(model3dAvail, result.model3dUrl ? 'STEP' : 'None', !!result.model3dUrl);
+
+  // Point the preview block at this part. It renders the Symbol tab now and the
+  // others lazily on first open (3D only imports three.js when its tab opens).
+  preview?.setResult(result, relayUrl);
 
   // Reset the install footer to its initial state.
   hide(installStatus);
@@ -713,6 +725,7 @@ function renderWritten(paths: string[]) {
 function resetForAnother() {
   current = null;
   candidates = [];
+  preview?.reset();
   hide(partCard);
   hide(candidateSection);
   hide(secondarySources);
