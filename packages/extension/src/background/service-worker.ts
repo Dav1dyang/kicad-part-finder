@@ -374,15 +374,26 @@ chrome.commands.onCommand.addListener((command, tab) => {
 async function openFinderTab(sourceTabId: number) {
   const url = `${chrome.runtime.getURL(SIDEPANEL_PATH)}?tab=${sourceTabId}`;
 
-  // Reuse an existing finder tab if we have one.
+  // Reuse an existing finder tab if we have one — but ONLY if it still hosts the
+  // finder. If the user navigated that tab to another site, reusing it would
+  // overwrite their page; open a fresh tab instead.
   if (finderTabId !== null) {
     try {
       const existing = await chrome.tabs.get(finderTabId);
-      await chrome.tabs.update(finderTabId, { url, active: true });
-      if (typeof existing.windowId === 'number') {
-        await chrome.windows.update(existing.windowId, { focused: true });
+      const finderPrefix = chrome.runtime.getURL(SIDEPANEL_PATH);
+      // `existing.url` (or pendingUrl mid-navigation) is readable for our own
+      // extension pages. If it no longer starts with the finder page, the user
+      // navigated away — stop tracking it and fall through to a fresh tab.
+      const currentUrl = existing.url || (existing as { pendingUrl?: string }).pendingUrl || '';
+      if (!currentUrl.startsWith(finderPrefix)) {
+        finderTabId = null;
+      } else {
+        await chrome.tabs.update(finderTabId, { url, active: true });
+        if (typeof existing.windowId === 'number') {
+          await chrome.windows.update(existing.windowId, { focused: true });
+        }
+        return;
       }
-      return;
     } catch {
       // The tracked tab vanished without an onRemoved — recreate below.
       finderTabId = null;
@@ -557,5 +568,13 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === 'complete' && selectionListenerInjected.has(tabId)) {
     selectionListenerInjected.delete(tabId);
     void injectSelectionListener(tabId);
+  }
+  // If the tracked finder tab is navigated away from the finder page (the user
+  // typed a new URL / followed a link), stop tracking it so the next open spawns
+  // a fresh tab instead of overwriting wherever they went.
+  if (tabId === finderTabId && typeof changeInfo.url === 'string') {
+    if (!changeInfo.url.startsWith(chrome.runtime.getURL(SIDEPANEL_PATH))) {
+      finderTabId = null;
+    }
   }
 });
