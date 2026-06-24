@@ -95,6 +95,37 @@ export interface FloatHandle {
 }
 
 /**
+ * Best-effort keep-awake for Arc. Arc backgrounds/suspends the opener tab the
+ * moment you switch tabs, which drops the Document PiP window with it (Chrome and
+ * Dia keep it — that is the spec). Holding the opener "audible" with an inaudible
+ * Web Audio tone makes Arc less likely to suspend it while floating. Feature-
+ * detected and fully reversible; a harmless no-op everywhere else.
+ */
+function keepOpenerAwake(win: Window): () => void {
+  try {
+    const Ctx =
+      (win as unknown as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext })
+        .AudioContext ||
+      (win as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctx) return () => {};
+    const ctx = new Ctx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    gain.gain.value = 0.0001; // inaudible, but marks the tab as producing audio
+    osc.frequency.value = 1;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    return () => {
+      try { osc.stop(); } catch { /* already stopped */ }
+      try { void ctx.close(); } catch { /* already closed */ }
+    };
+  } catch {
+    return () => {};
+  }
+}
+
+/**
  * Move `root` into a new Document PiP window (always-on-top), copying styles so
  * it looks identical. The node is returned to its original parent when the PiP
  * window closes (via `pagehide`) or {@link FloatHandle.close} is called.
@@ -122,6 +153,9 @@ export async function floatOnTop(
     .documentPictureInPicture;
   const pipWindow = await pip.requestWindow({ ...PIP_WINDOW_SIZE });
 
+  // Arc suspends the backgrounded opener tab + drops the float; try to hold it awake.
+  const stopKeepAwake = keepOpenerAwake(win);
+
   // Mirror lang + a base background so there's no white flash before styles load.
   try {
     pipWindow.document.documentElement.lang = sourceDoc.documentElement.lang || 'en';
@@ -140,6 +174,7 @@ export async function floatOnTop(
   const restore = () => {
     if (restored) return;
     restored = true;
+    stopKeepAwake();
     // Put the node back exactly where it came from.
     try {
       if (originalParent) {
