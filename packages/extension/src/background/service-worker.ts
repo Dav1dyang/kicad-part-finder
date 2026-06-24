@@ -37,6 +37,13 @@ let finderTabId: number | null = null;
 // System Access (folder grant / install) — tracked so we can close them when the
 // work finishes and stop tracking them when the user closes them manually.
 const helperWindowIds = new Set<number>();
+// Subset of helperWindowIds that are INSTALL helpers (`&install=`): if one of
+// these is closed before reporting a terminal outcome, the overlay is still stuck
+// on "Installing in a window…", so onRemoved broadcasts a reset for it.
+const installHelperWindowIds = new Set<number>();
+// Helper windows that reported a terminal outcome via OVERLAY_HELPER_DONE — so the
+// onRemoved safety-net doesn't double-fire a reset after a normal finish.
+const helperReportedDone = new Set<number>();
 // Grace period before the SW force-closes a finished helper window. The helper
 // shows its success state + self-closes (~1.2s); this is only a safety net for
 // contexts where window.close() is blocked. Slightly longer than the self-close.
@@ -220,7 +227,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const bucket = typeof message.bucket === 'string' && message.bucket
       ? `&bucket=${encodeURIComponent(message.bucket)}`
       : '';
-    void openHelperWindow(`&install=${lcsc}${bucket}`);
+    void openHelperWindow(`&install=${lcsc}${bucket}`, /* isInstall */ true);
     sendResponse({ ok: true });
     return false; // answered synchronously
   }
@@ -237,23 +244,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
-  // The helper window (setup / install) finished its FS work. Broadcast right away
-  // so the overlay reflects readiness / the install, but let the helper keep its
-  // success state visible and self-close (~1.2s); only force-close it after a
-  // grace period as a safety net if window.close() was blocked.
+  // The helper window (setup / install) reached a terminal outcome. Broadcast the
+  // matching signal right away so the overlay reflects readiness / the install /
+  // the failure, then handle the window.
+  //
+  // outcome `kind`:
+  //   'folder'       → folder granted          → OVERLAY_FOLDER_READY, close helper
+  //   'installed'    → install succeeded       → OVERLAY_INSTALLED,    close helper
+  //   'failed'       → convert/install failed  → OVERLAY_INSTALL_FAILED, close helper
+  //   'needs-folder' → folder grant lapsed     → OVERLAY_INSTALL_FAILED (needsFolder);
+  //                    the helper STAYS OPEN so the user grants the folder there.
   if (message.type === 'OVERLAY_HELPER_DONE') {
     // `sender.tab` is undefined for a popup-window extension page in MV3, so the
     // helper passes its own window id in the message; fall back to sender.tab just
     // in case.
     const winId = typeof message.windowId === 'number' ? message.windowId : sender.tab?.windowId;
+    // 'needs-folder' isn't terminal for the window — it must stay open for the
+    // grant. Mark it reported so the onRemoved safety-net doesn't also fire, but
+    // don't schedule a close. Every other kind ends the helper: let it keep its
+    // terminal state visible + self-close (~1.2s); force-close after a grace
+    // period as a safety net if window.close() was blocked.
     if (typeof winId === 'number') {
-      setTimeout(() => void closeHelperWindow(winId), HELPER_CLOSE_GRACE_MS);
+      helperReportedDone.add(winId);
+      if (message.kind !== 'needs-folder') {
+        setTimeout(() => void closeHelperWindow(winId), HELPER_CLOSE_GRACE_MS);
+      }
     }
-    // Re-broadcast a simplified signal for both the overlay content script and
-    // the overlay iframe to react to (folder ready / installed).
-    const outgoing = message.kind === 'installed'
-      ? { type: 'OVERLAY_INSTALLED' }
-      : { type: 'OVERLAY_FOLDER_READY' };
+    // Re-broadcast a simplified signal for both the overlay content script and the
+    // overlay iframe to react to (folder ready / installed / install failed).
+    const outgoing =
+      message.kind === 'installed'
+        ? { type: 'OVERLAY_INSTALLED' }
+        : message.kind === 'folder'
+          ? { type: 'OVERLAY_FOLDER_READY' }
+          : { type: 'OVERLAY_INSTALL_FAILED', needsFolder: message.kind === 'needs-folder' };
     chrome.runtime.sendMessage(outgoing).catch(() => {
       /* no listeners (overlay closed) — ignore */
     });
@@ -466,7 +490,7 @@ async function injectOverlay(tabId: number): Promise<boolean> {
  * tab). A fresh window is opened per request so concurrent jobs don't collide;
  * each closes itself when done (and we close it from OVERLAY_HELPER_DONE too).
  */
-async function openHelperWindow(extraQuery: string) {
+async function openHelperWindow(extraQuery: string, isInstall = false) {
   const url = `${chrome.runtime.getURL(SIDEPANEL_PATH)}?win=1${extraQuery}`;
   try {
     const win = await chrome.windows.create({
@@ -476,7 +500,12 @@ async function openHelperWindow(extraQuery: string) {
       url,
       focused: true,
     });
-    if (typeof win?.id === 'number') helperWindowIds.add(win.id);
+    if (typeof win?.id === 'number') {
+      helperWindowIds.add(win.id);
+      // Track install helpers so onRemoved can un-stick the overlay if the user
+      // closes the window before it reports a terminal outcome.
+      if (isInstall) installHelperWindowIds.add(win.id);
+    }
   } catch (err) {
     console.error('Failed to open overlay helper window:', err);
   }
@@ -486,6 +515,8 @@ async function openHelperWindow(extraQuery: string) {
 async function closeHelperWindow(windowId: number) {
   if (!helperWindowIds.has(windowId)) return;
   helperWindowIds.delete(windowId);
+  installHelperWindowIds.delete(windowId);
+  helperReportedDone.delete(windowId);
   try {
     await chrome.windows.remove(windowId);
   } catch {
@@ -506,7 +537,19 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // it's closed — whether we closed it or the user did.
 chrome.windows.onRemoved.addListener((windowId) => {
   if (windowId === finderWindowId) finderWindowId = null;
+  // Safety-net: if an INSTALL helper window is gone before it reported a terminal
+  // outcome (the user closed it mid-install), the overlay iframe is still stuck on
+  // "Installing in a window…". Broadcast a reset so it un-sticks and can retry.
+  if (installHelperWindowIds.has(windowId) && !helperReportedDone.has(windowId)) {
+    chrome.runtime
+      .sendMessage({ type: 'OVERLAY_INSTALL_FAILED', needsFolder: false })
+      .catch(() => {
+        /* no listeners (overlay closed) — ignore */
+      });
+  }
   helperWindowIds.delete(windowId);
+  installHelperWindowIds.delete(windowId);
+  helperReportedDone.delete(windowId);
 });
 
 // When tab navigates to a new page, re-inject selection listener if it was active

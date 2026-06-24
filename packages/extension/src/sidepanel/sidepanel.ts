@@ -269,6 +269,13 @@ async function init() {
     } else if (runningInOverlay && message.type === 'OVERLAY_INSTALLED') {
       void refreshOverlayReadiness();
       markOverlayInstalled();
+    } else if (runningInOverlay && message.type === 'OVERLAY_INSTALL_FAILED') {
+      // The delegated install ended without success (convert/install failed, the
+      // helper window was closed, or the folder grant lapsed). Reset the Install
+      // button out of its busy/disabled "Installing in a window…" state and
+      // surface a short hint so the user can retry instead of waiting forever.
+      void refreshOverlayReadiness();
+      markOverlayInstallFailed(message.needsFolder === true);
     }
   });
 
@@ -306,6 +313,29 @@ function markOverlayInstalled() {
     installBtn.disabled = true;
     setStatus(installStatus, 'Installed via helper window.', 'success');
   }
+}
+
+/**
+ * Reset the overlay iframe's Install button out of the "Installing in a window…"
+ * busy/disabled state after a delegated install ended without success, and
+ * surface a short retry hint. `needsFolder` distinguishes the lapsed-permission
+ * case (point the user at the popup window that's asking for the folder) from a
+ * genuine convert/install failure (just retry). Without this the button stays
+ * stuck on "Installing in a window…" forever.
+ */
+function markOverlayInstallFailed(needsFolder: boolean) {
+  // Clear the busy state so the button is clickable again. refreshInstallEnabled()
+  // then re-derives the disabled state from current readiness (relay + folder).
+  installBtn.textContent = needsFolder ? 'Grant the folder, then retry' : 'Install failed — try again';
+  installBtn.className = 'btn btn-primary';
+  refreshInstallEnabled();
+  setStatus(
+    installStatus,
+    needsFolder
+      ? 'Grant your library folder in the popup window, then it installs.'
+      : 'Install failed — try again.',
+    'error',
+  );
 }
 
 /**
@@ -351,7 +381,12 @@ async function runAutoInstallHelper(lcscId: string) {
   // Convert first so the card (and its editable metadata) is on screen whether or
   // not the folder is ready.
   await convertAndShow(lcscId, null);
-  if (!current) return; // convert failed — the status already explains why.
+  if (!current) {
+    // Convert failed — the status already explains why. Tell the overlay so it
+    // un-sticks its "Installing in a window…" button instead of waiting forever.
+    void finishHelper('failed');
+    return;
+  }
 
   // Honor an explicit destination bucket from the URL (the overlay passes the
   // user's chosen bucket); otherwise the auto-sorted default from showCard stays.
@@ -363,29 +398,34 @@ async function runAutoInstallHelper(lcscId: string) {
     // a gesture). The always-visible "Library" pill grants it; clicking it grants
     // AND — via onLibraryAction's helper-mode branch — proceeds straight to the
     // install, so it's a single click. The converted card is already on screen.
+    // Tell the overlay it needs a folder so it resets its button + surfaces a hint
+    // (otherwise it stays stuck on "Installing in a window…" forever). We DON'T
+    // close this helper — the user grants the folder right here, in this window.
     libPill.focus();
     setStatus(installStatus, 'Click the Library pill to confirm your folder, then it installs.', 'loading');
+    void notifyOverlay('needs-folder');
     return;
   }
 
-  // Folder is valid → install immediately, then finish.
+  // Folder is valid → install immediately, then finish (success or failure).
   await onInstall();
-  if (installBtn.classList.contains('is-done')) {
-    void finishHelper('installed');
-  }
+  void finishHelper(installBtn.classList.contains('is-done') ? 'installed' : 'failed');
 }
 
+/** A helper-window job's terminal outcome, broadcast back to the overlay iframe. */
+type HelperOutcome = 'folder' | 'installed' | 'failed' | 'needs-folder';
+
 /**
- * Wrap up a helper-window job: tell the SW (which broadcasts to the overlay so it
- * reflects readiness / "Installed ✓" right away), keep the success state on
- * screen ~1.2s, then self-close. The SW also closes us after a grace period as a
- * safety net if `window.close()` is blocked.
+ * Tell the SW the helper job reached a terminal outcome so it can broadcast the
+ * matching signal to the overlay iframe (folder-ready / installed / install-
+ * failed). Does NOT close this window — used on its own for `needs-folder`, where
+ * the helper must stay open so the user can grant the folder right here.
  *
  * We pass our own window id in the message: `sender.tab` is undefined for a
  * message sent from a popup-window extension page in MV3, so the SW can't derive
  * the window to force-close from the sender alone.
  */
-async function finishHelper(kind: 'folder' | 'installed') {
+async function notifyOverlay(kind: HelperOutcome) {
   let windowId: number | undefined;
   try {
     windowId = (await chrome.windows.getCurrent()).id;
@@ -395,8 +435,23 @@ async function finishHelper(kind: 'folder' | 'installed') {
   try {
     void chrome.runtime.sendMessage({ type: 'OVERLAY_HELPER_DONE', kind, windowId }).catch(() => {});
   } catch {
-    /* SW unreachable — the self-close below still tidies up */
+    /* SW unreachable — the self-close (if any) still tidies up */
   }
+}
+
+/**
+ * Wrap up a helper-window job: notify the SW (which broadcasts to the overlay so
+ * it reflects readiness / "Installed ✓" / "Install failed" right away), keep the
+ * terminal state on screen ~1.2s, then self-close. The SW also closes us after a
+ * grace period as a safety net if `window.close()` is blocked.
+ *
+ * Called on EVERY terminal outcome that ends the helper — success ('installed'/
+ * 'folder') AND failure ('failed') — so the overlay never stays stuck on
+ * "Installing in a window…". The lapsed-folder case ('needs-folder') uses
+ * `notifyOverlay` directly instead, since that window stays open for the grant.
+ */
+async function finishHelper(kind: HelperOutcome) {
+  await notifyOverlay(kind);
   setTimeout(() => {
     try {
       window.close();
@@ -562,10 +617,11 @@ async function onLibraryAction() {
     if (runningInSetup || autoInstallLcsc) {
       const closed = afterGrantInHelper(handle);
       // Install helper: the user re-confirmed the lapsed permission mid-install —
-      // now that the folder's valid, install and finish (notify SW + auto-close).
+      // now that the folder's valid, install and finish (notify SW + auto-close)
+      // on success OR failure so the overlay never stays stuck.
       if (!closed && autoInstallLcsc && current) {
         await onInstall();
-        if (installBtn.classList.contains('is-done')) void finishHelper('installed');
+        void finishHelper(installBtn.classList.contains('is-done') ? 'installed' : 'failed');
       }
     }
   } catch (err) {
