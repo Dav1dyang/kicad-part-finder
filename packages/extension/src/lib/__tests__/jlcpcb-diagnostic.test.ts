@@ -54,7 +54,7 @@ afterEach(() => {
 
 describe('resolveMpnDetailed diagnostic', () => {
   it('reports "http 200, N results" and returns matches on success', async () => {
-    const fetchSpy = vi.fn(async () =>
+    const fetchSpy = vi.fn(async (_url: string) =>
       fakeResponse({ ok: true, status: 200, json: () => jlcEnvelope(1) }),
     );
     vi.stubGlobal('fetch', fetchSpy);
