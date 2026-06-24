@@ -393,7 +393,7 @@ async function finishHelper(kind: 'folder' | 'installed') {
     /* not available — the SW just won't have a safety-net close */
   }
   try {
-    void chrome.runtime.sendMessage({ type: 'OVERLAY_HELPER_DONE', kind, windowId });
+    void chrome.runtime.sendMessage({ type: 'OVERLAY_HELPER_DONE', kind, windowId }).catch(() => {});
   } catch {
     /* SW unreachable — the self-close below still tidies up */
   }

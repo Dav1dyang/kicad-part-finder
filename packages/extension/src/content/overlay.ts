@@ -305,7 +305,7 @@ const OVERLAY_CSS = `
   /** Persist the current bounds (best-effort; never throws). */
   function saveBounds() {
     try {
-      void chrome.storage.local.set({ [STORAGE_KEY]: bounds });
+      void chrome.storage.local.set({ [STORAGE_KEY]: bounds }).catch(() => {});
     } catch {
       /* storage unavailable — keep the in-memory bounds for this session */
     }
