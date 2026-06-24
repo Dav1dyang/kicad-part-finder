@@ -1,4 +1,1 @@
-{
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": null
-}
+{ "$schema": "https://openapi.vercel.sh/vercel.json" }

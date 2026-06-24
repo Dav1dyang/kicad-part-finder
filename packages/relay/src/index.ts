@@ -65,7 +65,7 @@ function upstreamError(error: string, status: number): Response {
  * Server-side POST to the JLCPCB SMT component search with the same JSON body
  * the extension used to send directly. Returns JLCPCB's JSON body verbatim.
  */
-async function handleJlcpcbSearch(url: URL): Promise<Response> {
+export async function handleJlcpcbSearch(url: URL): Promise<Response> {
   const keyword = url.searchParams.get('keyword') ?? '';
   if (!keyword.trim()) {
     return upstreamError('missing keyword', 400);
@@ -113,7 +113,7 @@ async function handleJlcpcbSearch(url: URL): Promise<Response> {
  * Server-side GET of the EasyEDA component endpoint for an LCSC id. Returns the
  * EasyEDA JSON verbatim. Validates `lcsc` matches /^C\d+$/.
  */
-async function handleEasyedaComponent(url: URL): Promise<Response> {
+export async function handleEasyedaComponent(url: URL): Promise<Response> {
   const lcsc = url.searchParams.get('lcsc') ?? '';
   if (!LCSC_ID_RE.test(lcsc)) {
     return upstreamError(`invalid lcsc id: "${lcsc}" (expected like "C3235557")`, 400);
@@ -157,7 +157,7 @@ async function handleEasyedaComponent(url: URL): Promise<Response> {
  * Server-side GET of the EasyEDA STEP model store; streams the bytes back with
  * the upstream Content-Type. Validates uuid is hex.
  */
-async function handleEasyedaModel(url: URL): Promise<Response> {
+export async function handleEasyedaModel(url: URL): Promise<Response> {
   const uuid = url.searchParams.get('uuid') ?? '';
   if (!HEX_RE.test(uuid)) {
     return upstreamError(`invalid uuid: "${uuid}" (expected hex)`, 400);
