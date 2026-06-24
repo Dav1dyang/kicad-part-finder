@@ -28,9 +28,14 @@
       </div>
     </header>
 
-    <!-- Tiny note shown only while floating. -->
+    <!-- Tiny note shown only while floating (Document PiP). -->
     <div id="floatingNote" class="floating-note hidden">
       <span class="live-dot" aria-hidden="true"></span> Floating — stays on top
+    </div>
+
+    <!-- Subtle tag shown only when running in the standalone floating window. -->
+    <div id="windowNote" class="floating-note floating-note--window hidden">
+      <span class="live-dot" aria-hidden="true"></span> Floating window — stays open across tabs
     </div>
 
     <!-- Readiness strip: two compact pills. Always visible once setup is done. -->
@@ -51,13 +56,27 @@
       </button>
     </div>
 
-    <!-- Settings disclosure body: the relay URL field, tucked away. -->
+    <!-- Settings disclosure body: the relay URL field + open-mode toggle. -->
     <section id="settingsPanel" class="settings-panel hidden" aria-label="Settings">
       <label class="micro-label" for="relayUrlInput">Relay URL</label>
       <input id="relayUrlInput" class="text-input mono" type="text"
              placeholder="https://kicadpartsfinder.vercel.app/api"
              autocomplete="off" spellcheck="false" />
       <p class="hint">The deployed relay that proxies JLCPCB &amp; EasyEDA. See <code>packages/relay</code>.</p>
+
+      <!-- Open mode: switch to a standalone floating window that survives tab/app
+           switches (Document PiP gets dropped on tab-return in Arc). -->
+      <div class="setting-toggle">
+        <label class="toggle" for="windowModeToggle">
+          <input id="windowModeToggle" class="toggle-input" type="checkbox" role="switch" />
+          <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+          <span class="toggle-text">
+            <span class="toggle-title">Open as a floating window</span>
+            <span class="toggle-hint">Stays open across tabs — best for Arc (not always-on-top).</span>
+          </span>
+        </label>
+        <p id="windowModeNote" class="setting-note hidden" role="status">Applies next time you open the finder.</p>
+      </div>
     </section>
 
     <!-- First-run / missing setup. Takes over only when something isn't ready. -->

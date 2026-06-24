@@ -2,7 +2,7 @@
  * Tests for parsing the originating tab id from the popup-window URL.
  */
 import { describe, it, expect } from 'vitest';
-import { parseSourceTabId } from '../source-tab.js';
+import { parseSourceTabId, isWindowMode } from '../source-tab.js';
 
 describe('parseSourceTabId', () => {
   it('parses a numeric tab id', () => {
@@ -43,5 +43,33 @@ describe('parseSourceTabId', () => {
 
   it('returns null for a non-integer tab value', () => {
     expect(parseSourceTabId('?tab=1.5')).toBeNull();
+  });
+});
+
+describe('isWindowMode', () => {
+  it('is true when win=1 is present (floating-window mode)', () => {
+    expect(isWindowMode('?win=1')).toBe(true);
+  });
+
+  it('is true for win=1 alongside the tab param', () => {
+    expect(isWindowMode('?tab=42&win=1')).toBe(true);
+  });
+
+  it('works without a leading "?"', () => {
+    expect(isWindowMode('tab=42&win=1')).toBe(true);
+  });
+
+  it('is false when the win param is absent (auto mode)', () => {
+    expect(isWindowMode('?tab=42')).toBe(false);
+  });
+
+  it('is false for an empty query string', () => {
+    expect(isWindowMode('')).toBe(false);
+  });
+
+  it('is false for win values other than "1"', () => {
+    expect(isWindowMode('?win=0')).toBe(false);
+    expect(isWindowMode('?win=true')).toBe(false);
+    expect(isWindowMode('?win=')).toBe(false);
   });
 });

@@ -32,7 +32,7 @@ import {
   type InstallPartResult,
 } from '../lib/library-writer.js';
 import { getSecondarySourceLinks } from '../lib/mpn-sources.js';
-import { parseSourceTabId } from './source-tab.js';
+import { parseSourceTabId, isWindowMode } from './source-tab.js';
 import { isPipSupported, floatOnTop, type FloatHandle } from './float.js';
 import { createPreviewController, type PreviewController } from './preview-controller.js';
 
@@ -46,6 +46,11 @@ const floatBtn = $<HTMLButtonElement>('floatBtn');
 const settingsBtn = $<HTMLButtonElement>('settingsBtn');
 const settingsPanel = $('settingsPanel');
 const floatingNote = $('floatingNote');
+const windowNote = $('windowNote');
+
+// Settings — open mode
+const windowModeToggle = $<HTMLInputElement>('windowModeToggle');
+const windowModeNote = $('windowModeNote');
 
 // Readiness strip
 const libPill = $<HTMLButtonElement>('libPill');
@@ -110,6 +115,9 @@ let relayUrl = '';
 let detectDebounce: ReturnType<typeof setTimeout> | null = null;
 // Active Document PiP float, if any.
 let floatHandle: FloatHandle | null = null;
+// True when this document is the standalone floating popup window (URL `&win=1`).
+// Document PiP can't be used here, so the Float button is hidden and a tag shown.
+const runningInWindow = isWindowMode(location.search);
 // Symbol/Footprint/3D preview block in the result card (lazy per-tab render).
 let preview: PreviewController | null = null;
 
@@ -138,6 +146,8 @@ async function init() {
   // Keep the two relay inputs (settings + setup) mirrored and persisted.
   relayUrlInput.addEventListener('input', () => void onRelayUrlChange(relayUrlInput.value));
   relayUrlInputSetup.addEventListener('input', () => void onRelayUrlChange(relayUrlInputSetup.value));
+  // Open-mode toggle: floating window vs. the default (side panel / tab+PiP).
+  windowModeToggle.addEventListener('change', () => void onOpenModeToggle(windowModeToggle.checked));
 
   // --- Search ---
   searchBtn.addEventListener('click', () => void runSearch(searchInput.value.trim()));
@@ -159,11 +169,13 @@ async function init() {
   // --- Float on top (Document PiP) ---
   setupFloatButton();
 
-  // Load the saved relay URL. Until it's set, search/convert/install are
-  // disabled and the setup view nudges the user to set it.
+  // Load the saved relay URL + open-mode preference. Until the relay is set,
+  // search/convert/install are disabled and the setup view nudges the user.
   try {
-    const stored = await chrome.storage.local.get('relayUrl');
+    const stored = await chrome.storage.local.get(['relayUrl', 'openMode']);
     relayUrl = typeof stored.relayUrl === 'string' ? stored.relayUrl.trim() : '';
+    // Missing/unknown openMode → 'auto' (default). Reflect it in the toggle.
+    windowModeToggle.checked = stored.openMode === 'window';
   } catch {
     relayUrl = '';
   }
@@ -216,11 +228,21 @@ async function init() {
 
 // --- Float on top (Document Picture-in-Picture) ------------------------------
 /**
- * Wire up the Float button. Shown only where Document PiP is available. The PiP
- * window can't be requested from a side panel / extension popup — only a real
- * tab — so if `requestWindow` rejects we hide the button and explain once.
+ * Wire up the Float button. Shown only where Document PiP is available AND we're
+ * not already in the standalone floating window (Document PiP can't be requested
+ * from a popup window — `requestWindow` rejects — so the button is pointless
+ * there; we show a "Floating window" tag instead). The PiP window also can't be
+ * requested from a side panel, so if `requestWindow` rejects at click time we
+ * hide the button and explain once.
  */
 function setupFloatButton() {
+  // Running inside the standalone popup window (service worker added `&win=1`):
+  // hide Float entirely and surface a subtle "Floating window" tag.
+  if (runningInWindow) {
+    floatBtn.classList.add('hidden');
+    windowNote.classList.remove('hidden');
+    return;
+  }
   if (!isPipSupported()) {
     floatBtn.classList.add('hidden');
     return;
@@ -275,6 +297,31 @@ function toggleSettings(forceOpen?: boolean) {
     relayUrlInput.value = relayUrl;
     relayUrlInput.focus();
   }
+}
+
+// --- Open mode (floating window vs. side panel / tab) ------------------------
+/**
+ * Persist the open-mode preference and make the change discoverable. The new mode
+ * only takes effect the *next* time the finder is opened (we can't re-home the
+ * live document mid-task), so we surface a clear "Applies next time…" note rather
+ * than silently doing nothing. The note is shown whenever the chosen mode differs
+ * from how THIS document was actually opened.
+ */
+async function onOpenModeToggle(windowMode: boolean) {
+  const mode = windowMode ? 'window' : 'auto';
+  try {
+    await chrome.storage.local.set({ openMode: mode });
+  } catch {
+    /* storage unavailable — keep the in-memory toggle state for this session */
+  }
+
+  // Did the user just pick a mode that differs from the current document's mode?
+  // (Turning ON while in a side panel/tab, or OFF while in the floating window.)
+  const changesCurrent = windowMode !== runningInWindow;
+  windowModeNote.textContent = windowMode
+    ? 'Applies next time you open the finder — reopen it via the toolbar icon to float it.'
+    : 'Applies next time you open the finder.';
+  windowModeNote.classList.toggle('hidden', !changesCurrent);
 }
 
 // --- Library folder ----------------------------------------------------------

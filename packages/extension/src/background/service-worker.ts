@@ -4,6 +4,12 @@
  * same UI in a real browser TAB instead — a tab is a top-level context, so the
  * panel's "Float on top" (Document Picture-in-Picture) works from there. A
  * standalone popup window is kept as a fallback if a tab can't be created.
+ *
+ * The `openMode` setting (chrome.storage.local) lets the user override that: in
+ * 'window' mode the UI opens directly in a standalone popup window — which, unlike
+ * Document PiP, PERSISTS across tab/app switches in Arc (Arc drops the PiP window
+ * on tab-return). 'auto' (default / missing) keeps the side-panel-or-tab behavior.
+ *
  * Injects a text selection listener when the UI is active so highlighting text
  * on any page triggers a component search.
  */
@@ -44,6 +50,28 @@ async function getRelayUrl(): Promise<string> {
 
 /** Error string the panel surfaces when no relay URL is configured. */
 const NO_RELAY_ERROR = 'relay URL not set';
+
+/**
+ * How the finder should open. 'auto' = current behavior (side panel where
+ * supported, else a tab so Document PiP can float). 'window' = a standalone popup
+ * window that stays open across tab/app switches (best for Arc, where PiP gets
+ * dropped on tab-return). Stored in chrome.storage.local under `openMode`.
+ */
+type OpenMode = 'auto' | 'window';
+
+/**
+ * Read the user's open-mode preference. Treats a missing/empty/unknown value as
+ * 'auto' so nothing throws and the default behavior is preserved when storage is
+ * empty.
+ */
+async function getOpenMode(): Promise<OpenMode> {
+  try {
+    const { openMode } = await chrome.storage.local.get('openMode');
+    return openMode === 'window' ? 'window' : 'auto';
+  } catch {
+    return 'auto';
+  }
+}
 
 /** Check if chrome.sidePanel actually works (Arc exposes namespace but doesn't implement it) */
 let sidePanelSupported: boolean | null = null;
@@ -157,9 +185,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 /**
- * Open the finder UI for a given tab: a real side panel where supported, else a
- * standalone popup window (Arc et al.). Also injects the selection listener on
- * the source tab so highlight-to-search keeps working wherever the UI lands.
+ * Open the finder UI for a given tab. Respects the user's `openMode`:
+ *  - 'window' → a standalone popup window directly (skips side panel + tab). The
+ *    window persists across tab/app switches, which is what Arc users want when
+ *    Document PiP keeps getting dropped on tab-return.
+ *  - 'auto' (default) → a real side panel where supported, else a tab so the
+ *    panel's "Float on top" (Document PiP) can request an always-on-top window.
+ *
+ * Also injects the selection listener on the source tab so highlight-to-search
+ * keeps working wherever the UI lands, in BOTH paths.
  *
  * Shared by the toolbar-icon click and the keyboard shortcut. The shortcut path
  * may not pass a tab, so fall back to the active tab of the current window.
@@ -172,20 +206,28 @@ async function openFinder(tab?: chrome.tabs.Tab) {
   }
   if (typeof tabId !== 'number') return;
 
-  // chrome.sidePanel.open() requires a user gesture; both the icon click and the
-  // command keystroke qualify, so the call is valid from either entry point.
-  const supported = await isSidePanelSupported();
+  const openMode = await getOpenMode();
 
-  if (supported) {
-    try {
-      await chrome.sidePanel.open({ tabId });
-    } catch {
+  if (openMode === 'window') {
+    // Explicit window mode → go straight to the standalone popup window, which
+    // survives tab/app switches (unlike side panel / Document PiP in Arc).
+    await openFinderWindow(tabId);
+  } else {
+    // chrome.sidePanel.open() requires a user gesture; both the icon click and
+    // the command keystroke qualify, so the call is valid from either entry point.
+    const supported = await isSidePanelSupported();
+
+    if (supported) {
+      try {
+        await chrome.sidePanel.open({ tabId });
+      } catch {
+        await openFinderTab(tabId);
+      }
+    } else {
+      // No working side panel (e.g. Arc) → open the UI in a real TAB so its
+      // "Float on top" (Document PiP) button can request an always-on-top window.
       await openFinderTab(tabId);
     }
-  } else {
-    // No working side panel (e.g. Arc) → open the UI in a real TAB so its
-    // "Float on top" (Document PiP) button can request an always-on-top window.
-    await openFinderTab(tabId);
   }
 
   // Keep injecting the selection listener on the SOURCE tab so highlight-to-search
@@ -247,16 +289,18 @@ async function openFinderTab(sourceTabId: number) {
 }
 
 /**
- * Open the UI in a standalone popup window (last-resort fallback when a tab can't
- * be created). The originating tab id is passed via `?tab=` so the UI can
- * pre-fill the part detected on that page. NOTE: Document PiP "Float on top"
- * cannot be requested from a popup window, so the panel hides that button here.
+ * Open the UI in a standalone popup window — used both as the last-resort fallback
+ * when a tab can't be created AND as the explicit 'window' open mode (Arc users who
+ * want a UI that persists across tab/app switches). The originating tab id is passed
+ * via `?tab=` so the UI can pre-fill the part detected on that page, and `&win=1`
+ * flags window mode so the panel hides its "Float on top" button — Document PiP
+ * can't be requested from a popup window.
  *
  * Only one finder window is kept alive: if it's already open we focus it (and
  * re-point it at the new source tab) rather than spawning duplicates.
  */
 async function openFinderWindow(sourceTabId: number) {
-  const url = `${chrome.runtime.getURL(SIDEPANEL_PATH)}?tab=${sourceTabId}`;
+  const url = `${chrome.runtime.getURL(SIDEPANEL_PATH)}?tab=${sourceTabId}&win=1`;
 
   if (finderWindowId !== null) {
     try {

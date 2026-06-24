@@ -20,3 +20,15 @@ export function parseSourceTabId(search: string): number | null {
   const id = Number(raw);
   return Number.isInteger(id) ? id : null;
 }
+
+/**
+ * Whether the UI was opened in the standalone floating popup window (the service
+ * worker appends `&win=1` to the URL in window mode). Document Picture-in-Picture
+ * can't be requested from a popup window, so the caller hides the Float button
+ * when this is true.
+ *
+ * Truthy only for `win=1` so a stray/empty value never accidentally enables it.
+ */
+export function isWindowMode(search: string): boolean {
+  return new URLSearchParams(search).get('win') === '1';
+}

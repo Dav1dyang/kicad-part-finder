@@ -301,6 +301,92 @@ body {
   animation: drop-in 0.18s ease both;
 }
 
+/* Open-mode toggle — sits under the relay field, separated by a hairline so it
+   reads as its own setting without feeling bolted on. */
+.setting-toggle {
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+/* A row: switch on the left, label + hint stacked on the right. */
+.toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* The native checkbox is visually hidden but still drives state + focus + a11y. */
+.toggle-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+/* Track: an inset pill in the same surface family as the fields/pills. */
+.toggle-track {
+  position: relative;
+  flex-shrink: 0;
+  width: 34px;
+  height: 20px;
+  margin-top: 1px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  border: 1px solid var(--line-strong);
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+.toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: transform 0.16s ease, background 0.16s ease;
+}
+
+/* On: lit in the one accent, thumb slides over — matches the "ready/go" language. */
+.toggle-input:checked + .toggle-track {
+  background: var(--accent-wash);
+  border-color: var(--accent-edge);
+}
+.toggle-input:checked + .toggle-track .toggle-thumb {
+  background: var(--accent);
+  transform: translateX(14px);
+}
+
+.toggle:hover .toggle-track { border-color: var(--line-strong); }
+.toggle:hover .toggle-input:checked + .toggle-track { border-color: var(--accent-edge); }
+.toggle-input:focus-visible + .toggle-track { outline: none; box-shadow: var(--ring); }
+
+.toggle-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.toggle-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.toggle-hint { font-size: 11px; line-height: 1.45; color: var(--text-faint); }
+
+/* "Applies next time…" confirmation after flipping the switch. */
+.setting-note {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--accent-ink);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 45px; /* align under the label, clear of the 34px track + gap */
+}
+.setting-note::before {
+  content: '✓';
+  color: var(--accent);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
 /* ===========================================================================
    Setup view (first run / something missing)
    ======================================================================== */
