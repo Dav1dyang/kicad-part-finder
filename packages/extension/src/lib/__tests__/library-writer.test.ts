@@ -13,6 +13,7 @@ import {
   extractFootprintName,
   setFootprintModel,
   resolveModelDownload,
+  setSymbolFootprintRef
 } from '../library-writer';
 
 // A minimal but realistic library wrapper, matching what the converter emits.
@@ -218,3 +219,20 @@ function countChar(s: string, ch: string): number {
 function occurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }
+
+describe('setSymbolFootprintRef', () => {
+  it('qualifies a bare Footprint value with the lib nickname', () => {
+    const sym = '(symbol "X" (property "Footprint" "LQFP-48" (at 0 0 0)))';
+    expect(setSymbolFootprintRef(sym, 'DavidLib_IC:LQFP-48')).toContain(
+      '(property "Footprint" "DavidLib_IC:LQFP-48"',
+    );
+  });
+  it('replaces an already-qualified value', () => {
+    const sym = '(symbol "X" (property "Footprint" "Old:Foo"))';
+    expect(setSymbolFootprintRef(sym, 'DavidLib_IC:Bar')).toContain('"DavidLib_IC:Bar"');
+  });
+  it('leaves a symbol without a Footprint property unchanged', () => {
+    const sym = '(symbol "X" (property "Value" "X"))';
+    expect(setSymbolFootprintRef(sym, 'DavidLib_IC:Bar')).toBe(sym);
+  });
+});

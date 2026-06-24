@@ -197,6 +197,22 @@ export function setFootprintModel(footprintText: string, fileName: string): stri
   return `${before}\n${modelBlock}\n${after}`;
 }
 
+/**
+ * Rewrite the symbol's `Footprint` property value to a fully-qualified
+ * `LibNickname:FootprintName` reference so KiCad auto-links the symbol to the
+ * installed footprint. A bare footprint name (no `Lib:` prefix) shows in KiCad as
+ * "Invalid footprint specified" and forces a manual pick. Pure.
+ *
+ * Rewrites the value inside `(property "Footprint" "VALUE" …)`. If the symbol has
+ * no Footprint property (the converter always emits one), the text is unchanged.
+ */
+export function setSymbolFootprintRef(symbolText: string, footprintRef: string): string {
+  return symbolText.replace(
+    /(\(property\s+"Footprint"\s+")([^"]*)(")/,
+    `$1${footprintRef}$3`,
+  );
+}
+
 /** Trim a trailing slash so `${relayBase}/path` never doubles up. */
 function trimTrailingSlash(base: string): string {
   return base.replace(/\/+$/, '');
@@ -442,6 +458,11 @@ export async function installPart(
   let footprintText = input.footprint;
   result.footprintName = extractFootprintName(footprintText);
 
+  // Qualify the symbol's Footprint field as `DavidLib_<bucket>:<fpName>` so KiCad
+  // links symbol -> footprint automatically (a bare name => "Invalid footprint").
+  const footprintRef = `DavidLib_${bucket}:${result.footprintName}`;
+  const symbolText = setSymbolFootprintRef(input.symbol, footprintRef);
+
   // --- 3D model (best-effort, before the footprint is written) ---------------
   if (input.model3dUrl) {
     const dl = resolveModelDownload(input.model3dUrl, relayBase);
@@ -478,7 +499,7 @@ export async function installPart(
   try {
     const symbolsDir = await getDir(root, 'symbols');
     const existing = await readFileText(symbolsDir, symLibName);
-    const merged = mergeSymbolLibrary(existing, input.symbol);
+    const merged = mergeSymbolLibrary(existing, symbolText);
     result.symbolName = merged.name;
     result.symbolAdded = merged.added;
     if (merged.added) {
