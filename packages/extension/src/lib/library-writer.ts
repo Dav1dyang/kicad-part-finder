@@ -208,9 +208,76 @@ export function setFootprintModel(footprintText: string, fileName: string): stri
  */
 export function setSymbolFootprintRef(symbolText: string, footprintRef: string): string {
   return symbolText.replace(
-    /(\(property\s+"Footprint"\s+")([^"]*)(")/,
+    // The value group is escape-aware (`(?:[^"\\]|\\.)*`) so a value containing an
+    // escaped quote (e.g. `"3.5\" pitch"`) isn't truncated at the inner `\"` — a
+    // plain `[^"]*` would stop there and corrupt the symbol.
+    /(\(property\s+"Footprint"\s+")((?:[^"\\]|\\.)*)(")/,
     (_m, p1, _old, p3) => `${p1}${footprintRef}${p3}`,
   );
+}
+
+/**
+ * Find the bounds [start, end) of the top-level `(symbol "<name>" … )` block with
+ * the EXACT given name inside a `.kicad_sym` document, using a paren-depth scan so
+ * nested `(symbol "<name>_0_1" …)` children don't confuse it. Returns null if no
+ * such top-level symbol exists. Pure.
+ */
+function findSymbolBlockBounds(
+  libraryText: string,
+  symbolName: string,
+): { start: number; end: number } | null {
+  const re = new RegExp(`\\(symbol\\s+"${escapeRegExp(symbolName)}"`, 'g');
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(libraryText)) !== null) {
+    const start = match.index;
+    let depth = 0;
+    let inString = false;
+    for (let i = start; i < libraryText.length; i++) {
+      const ch = libraryText[i];
+      if (inString) {
+        if (ch === '\\') {
+          i++;
+          continue;
+        }
+        if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') inString = true;
+      else if (ch === '(') depth++;
+      else if (ch === ')') {
+        depth--;
+        if (depth === 0) return { start, end: i + 1 };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Rewrite the `Footprint` property of an EXISTING `(symbol "<name>" …)` block
+ * inside a library document to `footprintRef`, touching only that one symbol's
+ * block (other symbols are left alone). Used on the dedupe path so a part
+ * installed before the auto-link change — which kept a bare `(property
+ * "Footprint" "LQFP-48")` — gets upgraded to the qualified `Lib:Footprint` ref in
+ * place. Pure.
+ *
+ * @returns `{ text, changed }` — `changed` is false when the symbol is absent,
+ *   has no Footprint property, or already holds exactly `footprintRef`.
+ */
+export function updateExistingSymbolFootprintRef(
+  libraryText: string,
+  symbolName: string,
+  footprintRef: string,
+): { text: string; changed: boolean } {
+  const bounds = findSymbolBlockBounds(libraryText, symbolName);
+  if (!bounds) return { text: libraryText, changed: false };
+
+  const block = libraryText.slice(bounds.start, bounds.end);
+  const rewritten = setSymbolFootprintRef(block, footprintRef);
+  if (rewritten === block) return { text: libraryText, changed: false };
+
+  const text = libraryText.slice(0, bounds.start) + rewritten + libraryText.slice(bounds.end);
+  return { text, changed: true };
 }
 
 /** Trim a trailing slash so `${relayBase}/path` never doubles up. */
@@ -506,9 +573,24 @@ export async function installPart(
     result.symbolAdded = merged.added;
     if (merged.added) {
       await writeFileText(symbolsDir, symLibName, merged.text);
+      result.written.push(`symbols/${symLibName}`);
+    } else if (merged.name) {
+      // Dedupe: the symbol already exists, so mergeSymbolLibrary left the file
+      // untouched. But a part installed BEFORE the auto-link change kept a bare
+      // `(property "Footprint" "LQFP-48")`; upgrade that existing block's
+      // Footprint to the qualified `Lib:Footprint` ref in place so the link works
+      // on reinstall. Only write when it actually changed.
+      const upgraded = updateExistingSymbolFootprintRef(existing, merged.name, footprintRef);
+      if (upgraded.changed) {
+        await writeFileText(symbolsDir, symLibName, upgraded.text);
+        result.written.push(`symbols/${symLibName} (footprint link updated)`);
+      } else {
+        result.written.push(`symbols/${symLibName} (deduped)`);
+      }
+    } else {
+      // No usable symbol name (nothing to insert or upgrade) — report the path.
+      result.written.push(`symbols/${symLibName} (deduped)`);
     }
-    // Always report the symbol library path so the user knows where it landed.
-    result.written.push(`symbols/${symLibName}${merged.added ? '' : ' (deduped)'}`);
   } catch (err) {
     result.errors.push(`symbol: ${err instanceof Error ? err.message : 'write failed'}`);
   }

@@ -13,7 +13,8 @@ import {
   extractFootprintName,
   setFootprintModel,
   resolveModelDownload,
-  setSymbolFootprintRef
+  setSymbolFootprintRef,
+  updateExistingSymbolFootprintRef
 } from '../library-writer';
 
 // A minimal but realistic library wrapper, matching what the converter emits.
@@ -238,5 +239,77 @@ describe('setSymbolFootprintRef', () => {
   it('inserts the ref literally even with $-tokens (function replacer, not string)', () => {
     const sym = '(symbol "X" (property "Footprint" "old"))';
     expect(setSymbolFootprintRef(sym, 'DavidLib_IC:A$1$&B')).toContain('"DavidLib_IC:A$1$&B"');
+  });
+  it('replaces a value containing an escaped quote without truncating at it', () => {
+    // The old `[^"]*` value group stopped at the inner `\"`, leaving a dangling
+    // `" pitch"` and corrupting the symbol. The escape-aware group consumes it.
+    const sym = String.raw`(symbol "X" (property "Footprint" "3.5\" pitch" (at 0 0 0)))`;
+    const out = setSymbolFootprintRef(sym, 'DavidLib_Conn:HDR-2.54');
+    expect(out).toBe(String.raw`(symbol "X" (property "Footprint" "DavidLib_Conn:HDR-2.54" (at 0 0 0)))`);
+    // The old escaped-quote value is fully gone (no dangling fragment left behind).
+    expect(out).not.toContain('pitch');
+    expect(out).not.toContain(String.raw`\"`);
+  });
+});
+
+describe('updateExistingSymbolFootprintRef', () => {
+  // A symbol carrying a BARE Footprint value (the pre-auto-link shape) plus a
+  // nested child symbol so the paren-depth scan is exercised.
+  const SYM_FP = (name: string, fp: string) =>
+    `(symbol "${name}" (in_bom yes) (on_board yes)\n` +
+    `    (property "Reference" "U" (id 0) (at 0 0 0))\n` +
+    `    (property "Footprint" "${fp}" (id 2) (at 0 0 0))\n` +
+    `    (symbol "${name}_0_1"\n` +
+    `      (rectangle (start -5 5) (end 5 -5))\n` +
+    `    )\n` +
+    `  )`;
+
+  it('upgrades an existing symbol\'s bare Footprint to the qualified ref in place', () => {
+    const lib = LIB(SYM_FP('TPS2116DRLR', 'LQFP-48'));
+    const { text, changed } = updateExistingSymbolFootprintRef(
+      lib,
+      'TPS2116DRLR',
+      'DavidLib_IC:LQFP-48',
+    );
+    expect(changed).toBe(true);
+    expect(text).toContain('(property "Footprint" "DavidLib_IC:LQFP-48"');
+    expect(text).not.toContain('(property "Footprint" "LQFP-48"');
+    // Still a single, balanced library.
+    expect(occurrences(text, 'kicad_symbol_lib')).toBe(1);
+    expect(countChar(text, '(')).toBe(countChar(text, ')'));
+  });
+
+  it('reports no change when the ref already matches', () => {
+    const lib = LIB(SYM_FP('R0603', 'DavidLib_R:R0603'));
+    const { text, changed } = updateExistingSymbolFootprintRef(lib, 'R0603', 'DavidLib_R:R0603');
+    expect(changed).toBe(false);
+    expect(text).toBe(lib); // byte-for-byte unchanged
+  });
+
+  it('touches ONLY the named symbol, leaving sibling symbols\' footprints alone', () => {
+    const lib = LIB(SYM_FP('ALPHA', 'SOT-23'), SYM_FP('BETA', 'SOT-23'));
+    const { text, changed } = updateExistingSymbolFootprintRef(lib, 'BETA', 'DavidLib_T:SOT-23');
+    expect(changed).toBe(true);
+    // BETA upgraded…
+    expect(text).toContain('(property "Footprint" "DavidLib_T:SOT-23"');
+    // …ALPHA's bare footprint untouched (still exactly one bare "SOT-23").
+    expect(occurrences(text, '(property "Footprint" "SOT-23"')).toBe(1);
+    // ALPHA appears before BETA, and only one footprint was qualified.
+    expect(text.indexOf('"ALPHA"')).toBeLessThan(text.indexOf('"BETA"'));
+    expect(occurrences(text, '"DavidLib_T:SOT-23"')).toBe(1);
+  });
+
+  it('returns unchanged when the symbol is absent', () => {
+    const lib = LIB(SYM_FP('ALPHA', 'SOT-23'));
+    const { text, changed } = updateExistingSymbolFootprintRef(lib, 'GHOST', 'DavidLib_X:Y');
+    expect(changed).toBe(false);
+    expect(text).toBe(lib);
+  });
+
+  it('returns unchanged when the symbol has no Footprint property', () => {
+    const lib = LIB(SYM('NOFP')); // SYM(...) emits no Footprint property
+    const { text, changed } = updateExistingSymbolFootprintRef(lib, 'NOFP', 'DavidLib_X:Y');
+    expect(changed).toBe(false);
+    expect(text).toBe(lib);
   });
 });
