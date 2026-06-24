@@ -123,6 +123,10 @@ let detectDebounce: ReturnType<typeof setTimeout> | null = null;
 // PART_DETECTED broadcast must not re-run the search then — runSearch nulls
 // `current` synchronously, which would make onInstall's post-await deref throw.
 let installInFlight = false;
+// Overlay iframe only: true while a delegated folder-grant window is open. Guards
+// against a second OVERLAY_PICK_FOLDER (double-click on the Library pill) opening
+// a duplicate folder picker. Cleared on OVERLAY_FOLDER_READY / OVERLAY_FOLDER_DISMISSED.
+let pickFolderInFlight = false;
 // Active Document PiP float, if any.
 let floatHandle: FloatHandle | null = null;
 // True when this document is the standalone floating popup window (URL `&win=1`).
@@ -276,7 +280,17 @@ async function init() {
       if (detectDebounce) clearTimeout(detectDebounce);
       detectDebounce = setTimeout(() => void runSearch(searchInput.value.trim()), 350);
     } else if (runningInOverlay && message.type === 'OVERLAY_FOLDER_READY') {
+      // The delegated folder grant succeeded — clear the in-flight guard + re-
+      // enable the Library pill, then refresh readiness from the recorded name.
+      pickFolderInFlight = false;
+      libPill.disabled = false;
       void refreshOverlayReadiness();
+    } else if (runningInOverlay && message.type === 'OVERLAY_FOLDER_DISMISSED') {
+      // The grant window closed without granting (cancelled / closed) — re-enable
+      // the Library pill so the user can try again.
+      pickFolderInFlight = false;
+      libPill.disabled = false;
+      setStatus(searchStatus, 'Folder not granted — click Library to try again.', 'error');
     } else if (runningInOverlay && message.type === 'OVERLAY_INSTALLED') {
       installInFlight = false;
       void refreshOverlayReadiness();
@@ -606,10 +620,18 @@ async function onLibraryAction() {
   // Overlay iframe: the folder picker is blocked here. Delegate to a real window
   // via the SW (which opens `?win=1&setup=1`, grants, then broadcasts back).
   if (runningInOverlay) {
+    // Guard against a double-click spawning a second folder picker. (The SW also
+    // dedups setup windows; this gives immediate feedback + avoids a stray send.)
+    if (pickFolderInFlight) return;
+    pickFolderInFlight = true;
+    libPill.disabled = true;
     try {
       await chrome.runtime.sendMessage({ type: 'OVERLAY_PICK_FOLDER' });
       setStatus(searchStatus, 'Opening a window to grant your library folder…', 'loading');
     } catch {
+      // Couldn't even reach the SW — re-enable so the user can retry.
+      pickFolderInFlight = false;
+      libPill.disabled = false;
       setStatus(searchStatus, 'Could not open the folder-grant window.', 'error');
     }
     return;

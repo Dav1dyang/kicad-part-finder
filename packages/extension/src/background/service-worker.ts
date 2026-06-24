@@ -44,6 +44,10 @@ const installHelperWindowIds = new Set<number>();
 // Helper windows that reported a terminal outcome via OVERLAY_HELPER_DONE — so the
 // onRemoved safety-net doesn't double-fire a reset after a normal finish.
 const helperReportedDone = new Set<number>();
+// The single open folder-grant (`&setup=1`) helper window, if any. Deduped: a
+// second OVERLAY_PICK_FOLDER (e.g. a double-click on the overlay's Library pill)
+// focuses this window instead of spawning a second folder picker.
+let setupHelperWindowId: number | null = null;
 // Grace period before the SW force-closes a finished helper window. The helper
 // shows its success state + self-closes (~1.2s); this is only a safety net for
 // contexts where window.close() is blocked. Slightly longer than the self-close.
@@ -214,8 +218,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // popup window (a top-level extension document) to do the FS work.
 
   // Overlay asking to grant the library folder: open a one-time setup window.
+  // Deduped — if a setup window is already open (double-click on the Library
+  // pill), focus it instead of spawning a second folder picker.
   if (message.type === 'OVERLAY_PICK_FOLDER') {
-    void openHelperWindow(`&setup=1`);
+    void openSetupHelperWindow();
     sendResponse({ ok: true });
     return false; // answered synchronously
   }
@@ -501,7 +507,7 @@ async function injectOverlay(tabId: number): Promise<boolean> {
  * tab). A fresh window is opened per request so concurrent jobs don't collide;
  * each closes itself when done (and we close it from OVERLAY_HELPER_DONE too).
  */
-async function openHelperWindow(extraQuery: string, isInstall = false) {
+async function openHelperWindow(extraQuery: string, isInstall = false): Promise<number | null> {
   const url = `${chrome.runtime.getURL(SIDEPANEL_PATH)}?win=1${extraQuery}`;
   try {
     const win = await chrome.windows.create({
@@ -516,10 +522,30 @@ async function openHelperWindow(extraQuery: string, isInstall = false) {
       // Track install helpers so onRemoved can un-stick the overlay if the user
       // closes the window before it reports a terminal outcome.
       if (isInstall) installHelperWindowIds.add(win.id);
+      return win.id;
     }
   } catch (err) {
     console.error('Failed to open overlay helper window:', err);
   }
+  return null;
+}
+
+/**
+ * Open (or focus, if already open) the single folder-grant setup window. Deduped
+ * so a double-click on the overlay's Library pill can't spawn two folder pickers:
+ * a second request just refocuses the existing window.
+ */
+async function openSetupHelperWindow() {
+  if (setupHelperWindowId !== null) {
+    try {
+      await chrome.windows.update(setupHelperWindowId, { focused: true });
+      return; // already open — just bring it forward
+    } catch {
+      // The tracked window vanished without an onRemoved — recreate below.
+      setupHelperWindowId = null;
+    }
+  }
+  setupHelperWindowId = await openHelperWindow(`&setup=1`);
 }
 
 /** Close a helper window once its FS-Access job reports done. */
@@ -528,6 +554,7 @@ async function closeHelperWindow(windowId: number) {
   helperWindowIds.delete(windowId);
   installHelperWindowIds.delete(windowId);
   helperReportedDone.delete(windowId);
+  if (windowId === setupHelperWindowId) setupHelperWindowId = null;
   try {
     await chrome.windows.remove(windowId);
   } catch {
@@ -548,19 +575,30 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // it's closed — whether we closed it or the user did.
 chrome.windows.onRemoved.addListener((windowId) => {
   if (windowId === finderWindowId) finderWindowId = null;
+  const reportedDone = helperReportedDone.has(windowId);
   // Safety-net: if an INSTALL helper window is gone before it reported a terminal
   // outcome (the user closed it mid-install), the overlay iframe is still stuck on
   // "Installing in a window…". Broadcast a reset so it un-sticks and can retry.
-  if (installHelperWindowIds.has(windowId) && !helperReportedDone.has(windowId)) {
+  if (installHelperWindowIds.has(windowId) && !reportedDone) {
     chrome.runtime
       .sendMessage({ type: 'OVERLAY_INSTALL_FAILED', needsFolder: false })
       .catch(() => {
         /* no listeners (overlay closed) — ignore */
       });
   }
+  // Safety-net: if the SETUP (folder-grant) window is gone before it reported a
+  // grant (the user cancelled the picker or closed the window), the overlay's
+  // Library pill is still disabled "Opening a window…". Tell it the grant was
+  // dismissed so it re-enables the pill.
+  if (windowId === setupHelperWindowId && !reportedDone) {
+    chrome.runtime.sendMessage({ type: 'OVERLAY_FOLDER_DISMISSED' }).catch(() => {
+      /* no listeners (overlay closed) — ignore */
+    });
+  }
   helperWindowIds.delete(windowId);
   installHelperWindowIds.delete(windowId);
   helperReportedDone.delete(windowId);
+  if (windowId === setupHelperWindowId) setupHelperWindowId = null;
 });
 
 // When tab navigates to a new page, re-inject selection listener if it was active
