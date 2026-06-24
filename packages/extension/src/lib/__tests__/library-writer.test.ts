@@ -235,4 +235,8 @@ describe('setSymbolFootprintRef', () => {
     const sym = '(symbol "X" (property "Value" "X"))';
     expect(setSymbolFootprintRef(sym, 'DavidLib_IC:Bar')).toBe(sym);
   });
+  it('inserts the ref literally even with $-tokens (function replacer, not string)', () => {
+    const sym = '(symbol "X" (property "Footprint" "old"))';
+    expect(setSymbolFootprintRef(sym, 'DavidLib_IC:A$1$&B')).toContain('"DavidLib_IC:A$1$&B"');
+  });
 });

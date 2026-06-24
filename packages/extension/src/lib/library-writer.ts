@@ -209,7 +209,7 @@ export function setFootprintModel(footprintText: string, fileName: string): stri
 export function setSymbolFootprintRef(symbolText: string, footprintRef: string): string {
   return symbolText.replace(
     /(\(property\s+"Footprint"\s+")([^"]*)(")/,
-    `$1${footprintRef}$3`,
+    (_m, p1, _old, p3) => `${p1}${footprintRef}${p3}`,
   );
 }
 
@@ -452,15 +452,17 @@ export async function installPart(
   };
 
   const bucket = input.bucket;
-  const symLibName = `DavidLib_${bucket}.kicad_sym`;
-  const prettyName = `DavidLib_${bucket}.pretty`;
+  // KiCadPartFinder is a bare nickname; the seven buckets are DavidLib_<bucket>.
+  const libNick = bucket === 'KiCadPartFinder' ? 'KiCadPartFinder' : `DavidLib_${bucket}`;
+  const symLibName = `${libNick}.kicad_sym`;
+  const prettyName = `${libNick}.pretty`;
 
   let footprintText = input.footprint;
   result.footprintName = extractFootprintName(footprintText);
 
   // Qualify the symbol's Footprint field as `DavidLib_<bucket>:<fpName>` so KiCad
   // links symbol -> footprint automatically (a bare name => "Invalid footprint").
-  const footprintRef = `DavidLib_${bucket}:${result.footprintName}`;
+  const footprintRef = `${libNick}:${result.footprintName}`;
   const symbolText = setSymbolFootprintRef(input.symbol, footprintRef);
 
   // --- 3D model (best-effort, before the footprint is written) ---------------
