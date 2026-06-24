@@ -70,3 +70,23 @@ use).
 ```sh
 pnpm --filter @kicad-part-finder/relay typecheck
 ```
+
+## Deploy on Vercel (alternative to Cloudflare Workers)
+
+The relay also runs as a Vercel Edge Function (`api/[...path].ts` reuses the same
+handler). From this folder:
+
+```bash
+npx vercel deploy --prod    # first run links the project + logs you in
+```
+
+Vercel prints a URL like `https://kicad-part-relay-xxx.vercel.app`. The endpoints
+live under `/api`, so set the extension's **Relay URL** to:
+
+```
+https://<your-project>.vercel.app/api
+```
+
+Sanity check in a browser:
+`https://<your-project>.vercel.app/api/jlcpcb/search?keyword=TPS2116DRLR`
+→ JSON containing TPS2116DRLR / C3235557.

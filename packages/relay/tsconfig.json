@@ -1,12 +1,19 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "lib": ["ES2022"],
-    "types": ["@cloudflare/workers-types"],
+    "lib": [
+      "ES2022"
+    ],
+    "types": [
+      "@cloudflare/workers-types"
+    ],
     "noEmit": true,
     "declaration": false,
     "declarationMap": false,
     "sourceMap": false
   },
-  "include": ["src"]
+  "include": [
+    "api",
+    "src"
+  ]
 }
