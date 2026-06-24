@@ -282,7 +282,11 @@ async function init() {
       if (!text) return;
       searchInput.value = text;
       if (detectDebounce) clearTimeout(detectDebounce);
-      detectDebounce = setTimeout(() => void runSearch(searchInput.value.trim()), 350);
+      detectDebounce = setTimeout(() => {
+        // Re-check at fire time: an install may have started during the debounce.
+        if (installInFlight) return;
+        void runSearch(searchInput.value.trim());
+      }, 350);
     } else if (runningInOverlay && message.type === 'OVERLAY_FOLDER_READY') {
       // The delegated folder grant succeeded — clear the in-flight guard + re-
       // enable the Library pill, then refresh readiness from the recorded name.
@@ -1050,6 +1054,13 @@ function safeHttpUrl(value: string): string | null {
 // --- Install -----------------------------------------------------------------
 async function onInstall() {
   if (!current || !hasRelay()) return;
+
+  // Cancel any pending highlight-to-search debounce so a search scheduled just
+  // before this click can't fire mid-install and null `current` out from under us.
+  if (detectDebounce) {
+    clearTimeout(detectDebounce);
+    detectDebounce = null;
+  }
 
   const bucket = bucketSelect.value as LibraryChoice;
 
