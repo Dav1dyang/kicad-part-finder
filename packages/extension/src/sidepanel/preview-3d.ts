@@ -146,17 +146,21 @@ export function mount3dPreview(
 }
 
 /**
- * EasyEDA inlines its .mtl material library inside the .obj, but three's
- * OBJLoader expects materials in a separate file and logs a "THREE.OBJLoader:
- * Unexpected line" warning for every material row (newmtl/Ka/Kd/Ks/…). We swap
- * in one metallic material anyway (see buildScene), so strip the inlined-mtl
- * lines before parsing to keep the console — and the extension errors page — clean.
+ * EasyEDA inlines its .mtl material library inside the .obj (newmtl/endmtl/Ka/
+ * Kd/Ks/…), which three's OBJLoader doesn't understand — it warns once per such
+ * line. We override the material anyway (see buildScene), so WHITELIST the OBJ
+ * geometry/structure lines and drop everything else. A whitelist (vs chasing each
+ * material keyword) silences any non-standard marker — e.g. EasyEDA's `endmtl` —
+ * by construction, keeping the console and the extension errors page clean.
  */
-const MTL_LINE = /^\s*(newmtl|Ka|Kd|Ks|Ke|Ns|Ni|d|Tr|Tf|illum|mtllib|usemtl|map_\w+|bump|disp|decal|refl)\b/;
+const OBJ_GEOM_LINE = /^(vn|vt|vp|v|f|l|p|o|g|s)\b/;
 function stripInlinedMtl(objText: string): string {
   return objText
     .split('\n')
-    .filter((line) => !MTL_LINE.test(line))
+    .filter((line) => {
+      const t = line.trim();
+      return t === '' || t.startsWith('#') || OBJ_GEOM_LINE.test(t);
+    })
     .join('\n');
 }
 
