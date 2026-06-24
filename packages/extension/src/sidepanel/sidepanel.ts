@@ -119,6 +119,10 @@ let candidates: JlcMatch[] = [];
 let relayUrl = '';
 // Debounce live highlight-to-search so rapid re-selections don't spam searches.
 let detectDebounce: ReturnType<typeof setTimeout> | null = null;
+// True while an install is mid-`await` (top-level or delegated). A live
+// PART_DETECTED broadcast must not re-run the search then — runSearch nulls
+// `current` synchronously, which would make onInstall's post-await deref throw.
+let installInFlight = false;
 // Active Document PiP float, if any.
 let floatHandle: FloatHandle | null = null;
 // True when this document is the standalone floating popup window (URL `&win=1`).
@@ -258,6 +262,13 @@ async function init() {
   // window finishes.
   chrome.runtime.onMessage.addListener((message) => {
     if (message.type === 'PART_DETECTED' && message.part) {
+      // Helper windows (`?win=1&setup=1` / `&install=`) are single-purpose: they
+      // convert + install the part the SW handed them, then close. A live
+      // detection from another page must NOT hijack them into searching a
+      // different part. Likewise, never auto-search while an install is mid-flight
+      // — runSearch nulls `current` synchronously, which would crash onInstall's
+      // post-await deref (and re-point a helper at the wrong part).
+      if (runningInSetup || autoInstallLcsc || installInFlight) return;
       const part = message.part as DetectedPart;
       const text = part.lcscId || part.mpn || '';
       if (!text) return;
@@ -267,6 +278,7 @@ async function init() {
     } else if (runningInOverlay && message.type === 'OVERLAY_FOLDER_READY') {
       void refreshOverlayReadiness();
     } else if (runningInOverlay && message.type === 'OVERLAY_INSTALLED') {
+      installInFlight = false;
       void refreshOverlayReadiness();
       markOverlayInstalled();
     } else if (runningInOverlay && message.type === 'OVERLAY_INSTALL_FAILED') {
@@ -274,6 +286,7 @@ async function init() {
       // helper window was closed, or the folder grant lapsed). Reset the Install
       // button out of its busy/disabled "Installing in a window…" state and
       // surface a short hint so the user can retry instead of waiting forever.
+      installInFlight = false;
       void refreshOverlayReadiness();
       markOverlayInstallFailed(message.needsFolder === true);
     }
@@ -719,19 +732,24 @@ function refreshReadiness() {
   setupStepRelay.classList.toggle('is-done', hasRelay());
 
   // --- Search affordance ---
-  const blocked = !isReady();
+  // Search/convert/preview only need the relay; the folder is required at INSTALL
+  // time only. So disable Search solely for a missing relay — a relay-set user
+  // with no folder can still search + preview, then grant a folder to install.
+  const blocked = !hasRelay();
   searchBtn.disabled = blocked;
   searchField.classList.toggle('is-disabled', blocked);
   if (blocked) {
-    const what =
-      !hasRelay() && !hasFolder()
-        ? 'Set a relay URL and choose a library folder to search.'
-        : !hasRelay()
-          ? 'Set your relay URL to search.'
-          : 'Choose a library folder to search.';
+    const what = 'Set your relay URL to search.';
     setText(searchHint, what);
     searchHint.classList.remove('hidden');
     searchBtn.title = what;
+  } else if (!hasFolder()) {
+    // Relay's set but no folder yet: searching/previewing works; nudge that a
+    // folder is needed before installing (Install stays gated below).
+    const what = 'Search + preview work now — choose a library folder to install.';
+    setText(searchHint, what);
+    searchHint.classList.remove('hidden');
+    searchBtn.title = '';
   } else {
     searchHint.classList.add('hidden');
     searchBtn.title = '';
@@ -763,15 +781,13 @@ async function runSearch(query: string) {
   current = null;
   candidates = [];
 
-  // Not ready → nothing can be fetched. The hint already explains it; reinforce
-  // on the search status and bail before any message.
-  if (!isReady()) {
+  // Search / convert / preview only need the relay (the folder is required only
+  // at INSTALL time — onInstall guards on it). So gate Search on the relay alone:
+  // a relay-set / no-folder user can search → preview symbol/footprint/3D → then
+  // grant a folder → install (the v1 flow).
+  if (!hasRelay()) {
     refreshReadiness();
-    setStatus(
-      searchStatus,
-      !hasRelay() ? 'Set your relay URL first.' : 'Choose a library folder first.',
-      'error',
-    );
+    setStatus(searchStatus, 'Set your relay URL first.', 'error');
     return;
   }
 
@@ -1012,9 +1028,14 @@ async function onInstall() {
     installBtn.className = 'btn btn-primary is-busy';
     hide(successPanel);
     setStatus(installStatus, 'A helper window is writing the files…', 'loading');
+    // Stay "in flight" until the helper's terminal broadcast (OVERLAY_INSTALLED /
+    // OVERLAY_INSTALL_FAILED) lands, so a live detection can't null `current` out
+    // from under markOverlayInstalled() while the helper window works.
+    installInFlight = true;
     try {
       await chrome.runtime.sendMessage({ type: 'OVERLAY_INSTALL', lcscId, bucket });
     } catch {
+      installInFlight = false;
       failInstall('Could not open the install window.');
     }
     return;
@@ -1030,32 +1051,39 @@ async function onInstall() {
   hide(installStatus);
   hide(successPanel);
 
+  // Snapshot everything we need from `current` + the editable fields BEFORE the
+  // `await installPart`. A live PART_DETECTED that slips through during the await
+  // would null `current` via runSearch, so reading `current.meta.*` afterwards
+  // (the old success branch did) could throw; the in-flight guard now suppresses
+  // that re-search too, but capturing locals keeps onInstall correct regardless.
+  const mpn = fieldMpn.value.trim() || current.meta.mpn;
+  const partName = mpn || current.meta.lcsc || 'part';
+  const installInput = {
+    bucket,
+    symbol: current.symbol,
+    footprint: current.footprint,
+    model3dUrl: current.model3dUrl,
+    meta: {
+      ...current.meta,
+      mpn,
+      manufacturer: fieldManufacturer.value.trim(),
+      package: fieldPackage.value.trim(),
+      datasheet: fieldDatasheet.value.trim(),
+    },
+  };
+
+  installInFlight = true;
   let res: InstallPartResult;
   try {
-    res = await installPart(
-      libraryFolder,
-      {
-        bucket,
-        symbol: current.symbol,
-        footprint: current.footprint,
-        model3dUrl: current.model3dUrl,
-        meta: {
-          ...current.meta,
-          mpn: fieldMpn.value.trim() || current.meta.mpn,
-          manufacturer: fieldManufacturer.value.trim(),
-          package: fieldPackage.value.trim(),
-          datasheet: fieldDatasheet.value.trim(),
-        },
-      },
-      relayUrl,
-    );
+    res = await installPart(libraryFolder, installInput, relayUrl);
   } catch (err) {
     failInstall(err instanceof Error ? err.message : 'Install failed.');
     return;
+  } finally {
+    installInFlight = false;
   }
 
   if (res.ok) {
-    const partName = fieldMpn.value.trim() || current.meta.mpn || current.meta.lcsc || 'part';
     installBtn.textContent = `Installed ${partName} → ${bucketLabel(bucket)}`;
     installBtn.className = 'btn btn-primary is-done';
     installBtn.disabled = true;
