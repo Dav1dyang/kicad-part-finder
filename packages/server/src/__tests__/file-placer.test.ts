@@ -105,4 +105,51 @@ describe('File Placer', () => {
     const placed = await placeFiles(files, config);
     expect(placed).toHaveLength(3);
   });
+
+  it('repairs baked-in temp 3D-model paths in footprints', async () => {
+    const files: ComponentFile[] = [
+      {
+        filename: 'BAT-SMD.kicad_mod',
+        content:
+          '(footprint "BAT-SMD" (layer "F.Cu")\n' +
+          '  (model "/var/folders/6g/xx/T/kicad-part-ABCDE/component.3dshapes/BAT-SMD.wrl"\n' +
+          '    (offset (xyz 0 0 0)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0)))\n)',
+        encoding: 'utf-8',
+        type: 'footprint',
+      },
+      {
+        filename: 'BAT-SMD.wrl',
+        content: Buffer.from('#VRML V2.0 utf8').toString('base64'),
+        encoding: 'base64',
+        type: '3dmodel',
+      },
+    ];
+
+    const placed = await placeFiles(files, config);
+    const fp = placed.find((p) => p.type === 'footprint')!;
+    const content = await readFile(fp.path, 'utf-8');
+
+    const expected = join(config.paths.model3dDir, 'BAT-SMD.wrl').replace(/\\/g, '/');
+    expect(content).toContain(`(model "${expected}"`);
+    // The original conversion temp dir must be gone. (Don't assert on
+    // '/var/folders/' itself — the test's own model dir lives there.)
+    expect(content).not.toContain('kicad-part-ABCDE');
+    expect(content).not.toContain('component.3dshapes');
+  });
+
+  it('leaves model references that are not part of the batch untouched', async () => {
+    const files: ComponentFile[] = [
+      {
+        filename: 'R_0603.kicad_mod',
+        content:
+          '(footprint "R_0603" (model "${KICAD9_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603.wrl"))',
+        encoding: 'utf-8',
+        type: 'footprint',
+      },
+    ];
+
+    const placed = await placeFiles(files, config);
+    const content = await readFile(placed[0].path, 'utf-8');
+    expect(content).toContain('${KICAD9_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603.wrl');
+  });
 });

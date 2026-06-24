@@ -7,89 +7,245 @@
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
+  <!-- The whole UI lives inside #app. Document Picture-in-Picture moves this
+       single node into the PiP window and back, so it stays self-contained. -->
   <div id="app">
-    <header class="header">
-      <h1>KiCad Part Finder</h1>
-      <div id="serverStatus" class="status-dot disconnected" title="Server disconnected"></div>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">Part&nbsp;Finder</span>
+      </div>
+      <div class="topbar-actions">
+        <!-- Float on top (Document PiP). Hidden unless the API is available. -->
+        <button id="floatBtn" class="icon-btn hidden" type="button" title="Float on top — always-on-top window">
+          <span class="icon-glyph" aria-hidden="true">⤢</span>
+          <span class="icon-label">Float</span>
+        </button>
+        <!-- Settings disclosure (relay URL lives here, out of the main flow). -->
+        <button id="settingsBtn" class="icon-btn" type="button" aria-expanded="false" aria-controls="settingsPanel" title="Settings">
+          <span class="icon-glyph" aria-hidden="true">⚙</span>
+        </button>
+      </div>
     </header>
 
-    <!-- No part detected -->
-    <div id="emptyState" class="section">
-      <p class="muted">Highlight a part number on any page, or navigate to a DigiKey / LCSC product page.</p>
+    <!-- Tiny note shown only while floating (Document PiP). -->
+    <div id="floatingNote" class="floating-note hidden">
+      <span class="live-dot" aria-hidden="true"></span> Floating — stays on top
     </div>
 
-    <!-- Part detected -->
-    <div id="partInfo" class="section hidden">
-      <div class="part-header">
-        <span id="partSource" class="badge">DigiKey</span>
-        <h2 id="partMpn" class="mpn"></h2>
-      </div>
-      <p id="partManufacturer" class="detail"></p>
-      <p id="partDescription" class="detail muted"></p>
+    <!-- Subtle tag shown only when running in the standalone floating window. -->
+    <div id="windowNote" class="floating-note floating-note--window hidden">
+      <span class="live-dot" aria-hidden="true"></span> Floating window — stays open across tabs
     </div>
 
-    <!-- EasyEDA results -->
-    <div id="easyedaResults" class="section hidden">
-      <h3>EasyEDA / LCSC Library</h3>
-      <div id="easyedaLoading" class="loading">Searching...</div>
-      <div id="easyedaFiles" class="file-grid hidden">
-        <div class="file-item" id="symbolAvail">
-          <span class="file-icon">📐</span>
-          <span class="file-label">Symbol</span>
-          <span class="file-status">—</span>
-        </div>
-        <div class="file-item" id="footprintAvail">
-          <span class="file-icon">🔲</span>
-          <span class="file-label">Footprint</span>
-          <span class="file-status">—</span>
-        </div>
-        <div class="file-item" id="model3dAvail">
-          <span class="file-icon">📦</span>
-          <span class="file-label">3D Model</span>
-          <span class="file-status">—</span>
-        </div>
-      </div>
-      <button id="installBtn" class="btn-primary hidden" disabled>
-        Install to KiCad
+    <!-- Readiness strip: two compact pills. Always visible once setup is done. -->
+    <div id="readyStrip" class="ready-strip" role="group" aria-label="Setup status">
+      <button id="libPill" class="pill" type="button">
+        <span class="pill-icon" aria-hidden="true">▣</span>
+        <span class="pill-body">
+          <span class="pill-key">Library</span>
+          <span id="libPillValue" class="pill-value">Choose folder</span>
+        </span>
       </button>
-      <div id="installStatus" class="install-status hidden"></div>
+      <button id="relayPill" class="pill" type="button">
+        <span class="pill-icon" aria-hidden="true">◇</span>
+        <span class="pill-body">
+          <span class="pill-key">Relay</span>
+          <span id="relayPillValue" class="pill-value">Set relay</span>
+        </span>
+      </button>
     </div>
 
-    <!-- LCSC Stock Info -->
-    <div id="stockInfo" class="section hidden">
-      <h3>LCSC / JLCPCB Stock</h3>
-      <div id="stockPrimary" class="stock-primary"></div>
-      <div id="variantList" class="variant-list"></div>
-    </div>
+    <!-- Settings disclosure body: the relay URL field + open-mode selector. -->
+    <section id="settingsPanel" class="settings-panel hidden" aria-label="Settings">
+      <label class="micro-label" for="relayUrlInput">Relay URL</label>
+      <input id="relayUrlInput" class="text-input mono" type="text"
+             placeholder="https://kicadpartsfinder.vercel.app/api"
+             autocomplete="off" spellcheck="false" />
+      <p class="hint">The deployed relay that proxies JLCPCB &amp; EasyEDA. See <code>packages/relay</code>.</p>
 
-    <!-- Secondary sources -->
-    <div id="secondarySources" class="section hidden">
-      <h3>Also search on</h3>
-      <div id="sourceLinks" class="source-links"></div>
-    </div>
-
-    <!-- ZIP drop zone -->
-    <div class="section">
-      <h3>Import from ZIP</h3>
-      <div id="dropZone" class="drop-zone">
-        <p>Drop a SnapEDA / CSE ZIP here</p>
-        <p class="muted">or click to browse</p>
-        <input type="file" id="fileInput" accept=".zip" hidden />
+      <!-- Open mode: how the finder appears when you open it. A 3-way segmented
+           selector — side panel/tab (auto), a standalone floating window, or a
+           draggable in-page overlay. Persists `openMode`. -->
+      <div class="setting-block">
+        <span class="micro-label" id="openModeLabel">Open the finder as</span>
+        <div id="openModeSelector" class="segmented" role="radiogroup" aria-labelledby="openModeLabel">
+          <label class="segment">
+            <input class="segment-input" type="radio" name="openMode" value="auto" />
+            <span class="segment-face">
+              <span class="segment-title">Side panel / tab</span>
+              <span class="segment-hint">Default — floats via Picture-in-Picture.</span>
+            </span>
+          </label>
+          <label class="segment">
+            <input class="segment-input" type="radio" name="openMode" value="window" />
+            <span class="segment-face">
+              <span class="segment-title">Floating window</span>
+              <span class="segment-hint">Stays open across tabs — best for Arc.</span>
+            </span>
+          </label>
+          <label class="segment">
+            <input class="segment-input" type="radio" name="openMode" value="overlay" />
+            <span class="segment-face">
+              <span class="segment-title">In-page overlay</span>
+              <span class="segment-hint">A draggable panel on the current page.</span>
+            </span>
+          </label>
+        </div>
+        <p id="windowModeNote" class="setting-note hidden" role="status">Reopen the finder via the toolbar icon to apply.</p>
       </div>
-      <div id="uploadStatus" class="install-status hidden"></div>
-    </div>
+    </section>
 
-    <!-- Settings -->
-    <div class="section settings">
-      <details>
-        <summary>Settings</summary>
-        <label>
-          Server URL
-          <input id="serverUrl" type="text" value="http://localhost:3456" />
-        </label>
-        <button id="saveSettings" class="btn-small">Save</button>
-      </details>
-    </div>
+    <!-- First-run / missing setup. Takes over only when something isn't ready. -->
+    <section id="setupView" class="setup-view hidden" aria-label="Setup">
+      <div class="setup-head">
+        <h2 class="setup-title">Two things to set up</h2>
+        <p class="setup-sub">One time — both are stored locally.</p>
+      </div>
+
+      <div class="setup-step" id="setupStepLib">
+        <div class="setup-step-num" aria-hidden="true">1</div>
+        <div class="setup-step-main">
+          <div class="setup-step-title">KiCad library folder</div>
+          <p class="hint">Pick your library root (e.g. <code>~/Documents/GitHub/kicad-libraries</code>). Parts are written inside it; KiCad's global tables are never touched.</p>
+          <button id="chooseFolderBtn" class="btn btn-ghost" type="button">Choose folder…</button>
+        </div>
+      </div>
+
+      <div class="setup-step" id="setupStepRelay">
+        <div class="setup-step-num" aria-hidden="true">2</div>
+        <div class="setup-step-main">
+          <div class="setup-step-title">Relay URL</div>
+          <p class="hint">Paste your deployed relay origin so searches can reach JLCPCB &amp; EasyEDA.</p>
+          <input id="relayUrlInputSetup" class="text-input mono" type="text"
+                 placeholder="https://kicadpartsfinder.vercel.app/api"
+                 autocomplete="off" spellcheck="false" />
+        </div>
+      </div>
+    </section>
+
+    <!-- Search -->
+    <section class="search-block" aria-label="Search">
+      <label class="micro-label" for="searchInput">LCSC&nbsp;# or MPN</label>
+      <div class="search-field">
+        <span class="search-glyph" aria-hidden="true">⌕</span>
+        <input id="searchInput" class="search-input mono" type="text"
+               placeholder="C3235557 · TPS2116DRLR" autocomplete="off" spellcheck="false" />
+        <button id="searchBtn" class="search-go" type="button" title="Search">Search</button>
+      </div>
+      <div id="searchHint" class="search-hint hidden"></div>
+      <div id="searchStatus" class="status hidden" role="status"></div>
+    </section>
+
+    <!-- Candidate picker (when an MPN resolves to multiple LCSC parts) -->
+    <section id="candidateSection" class="candidate-block hidden" aria-label="Candidates">
+      <label class="micro-label" for="candidateSelect">Multiple matches — pick one</label>
+      <div class="select-wrap">
+        <select id="candidateSelect" class="select mono"></select>
+      </div>
+    </section>
+
+    <!-- Result card -->
+    <article id="partCard" class="card hidden" aria-label="Part">
+      <header class="card-head">
+        <div class="card-head-top">
+          <span id="cardLcsc" class="lcsc-chip mono">C—</span>
+          <span id="stockBadge" class="stock-badge hidden"></span>
+        </div>
+        <h2 id="cardMpn" class="card-mpn mono"></h2>
+        <div id="cardSub" class="card-sub"></div>
+      </header>
+
+      <div class="card-body">
+        <!-- Preview: Symbol · Footprint · 3D. Each tab's preview is rendered
+             lazily on first activation (3D only loads three.js when opened). -->
+        <section class="preview" aria-label="Previews">
+          <div class="preview-tabs" role="tablist" aria-label="Preview type">
+            <button id="previewTabSymbol" class="preview-tab is-active" role="tab" type="button"
+                    aria-selected="true" aria-controls="previewPaneSymbol" data-preview="symbol">Symbol</button>
+            <button id="previewTabFootprint" class="preview-tab" role="tab" type="button"
+                    aria-selected="false" aria-controls="previewPaneFootprint" data-preview="footprint">Footprint</button>
+            <button id="previewTab3d" class="preview-tab" role="tab" type="button"
+                    aria-selected="false" aria-controls="previewPane3d" data-preview="3d">3D</button>
+          </div>
+          <div class="preview-stage">
+            <div id="previewPaneSymbol" class="preview-pane is-active" role="tabpanel"
+                 aria-labelledby="previewTabSymbol"></div>
+            <div id="previewPaneFootprint" class="preview-pane" role="tabpanel"
+                 aria-labelledby="previewTabFootprint" hidden></div>
+            <div id="previewPane3d" class="preview-pane preview-pane--3d" role="tabpanel"
+                 aria-labelledby="previewTab3d" hidden></div>
+          </div>
+        </section>
+
+        <div class="field">
+          <label class="micro-label" for="fieldMpn">MPN <span class="flag hidden" id="flagMpn">confirm</span></label>
+          <input id="fieldMpn" class="text-input mono" type="text" />
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label class="micro-label" for="fieldManufacturer">Manufacturer</label>
+            <input id="fieldManufacturer" class="text-input" type="text" />
+          </div>
+          <div class="field">
+            <label class="micro-label" for="fieldPackage">Package</label>
+            <input id="fieldPackage" class="text-input mono" type="text" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="micro-label" for="fieldDatasheet">Datasheet <span class="flag hidden" id="flagDatasheet">confirm</span></label>
+          <div class="datasheet-field">
+            <input id="fieldDatasheet" class="text-input mono" type="text" />
+            <a id="datasheetLink" class="datasheet-open hidden" target="_blank" rel="noopener" title="Open datasheet">↗</a>
+          </div>
+        </div>
+
+        <!-- Destination bucket — the most consequential choice, given prominence. -->
+        <div class="field dest-field">
+          <label class="micro-label" for="bucketSelect">Destination library</label>
+          <div class="select-wrap dest-select-wrap">
+            <span class="dest-glyph" aria-hidden="true">→</span>
+            <select id="bucketSelect" class="select mono dest-select"></select>
+          </div>
+        </div>
+
+        <!-- What will be written -->
+        <div class="assets">
+          <div class="asset is-ready" id="symbolAvail">
+            <span class="asset-name">Symbol</span>
+            <span class="asset-state">Ready</span>
+          </div>
+          <div class="asset is-ready" id="footprintAvail">
+            <span class="asset-name">Footprint</span>
+            <span class="asset-state">Ready</span>
+          </div>
+          <div class="asset" id="model3dAvail">
+            <span class="asset-name">3D model</span>
+            <span class="asset-state">—</span>
+          </div>
+        </div>
+      </div>
+
+      <footer class="card-foot">
+        <button id="installBtn" class="btn btn-primary" type="button" disabled>Install to KiCad</button>
+        <div id="installStatus" class="status hidden" role="status"></div>
+
+        <!-- Success detail: what was written + where + restart note. -->
+        <div id="successPanel" class="success-panel hidden">
+          <ul id="writtenList" class="written-list"></ul>
+          <p class="restart-note">Restart KiCad to use the new library.</p>
+          <button id="installAnotherBtn" class="btn btn-ghost btn-block" type="button">Install another</button>
+        </div>
+      </footer>
+    </article>
+
+    <!-- Secondary sources — quiet fallback row. -->
+    <section id="secondarySources" class="sources hidden" aria-label="Other sources">
+      <div class="sources-label">Also search on</div>
+      <div id="sourceLinks" class="source-links"></div>
+    </section>
   </div>
 
   <script type="module" src="./sidepanel.ts"></script>

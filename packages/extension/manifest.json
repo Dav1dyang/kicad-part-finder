@@ -3,7 +3,12 @@
   "name": "KiCad Part Finder",
   "version": "0.1.0",
   "description": "Find and install KiCad symbols, footprints, and 3D models from DigiKey and LCSC",
-  "permissions": ["activeTab", "sidePanel", "storage", "scripting"],
+  "permissions": [
+    "activeTab",
+    "sidePanel",
+    "storage",
+    "scripting"
+  ],
   "host_permissions": [
     "https://www.digikey.com/*",
     "https://www.digikey.tw/*",
@@ -13,13 +18,9 @@
     "https://www.digikey.cn/*",
     "https://www.digikey.com.au/*",
     "https://www.digikey.ca/*",
-    "https://www.lcsc.com/*",
+    "https://*.lcsc.com/*",
     "https://lcsc.com/*",
-    "https://easyeda.com/*",
-    "https://modules.easyeda.com/*",
-    "https://jlcpcb.com/*",
-    "http://localhost:3456/*",
-    "<all_urls>"
+    "https://*.workers.dev/*"
   ],
   "content_scripts": [
     {
@@ -33,7 +34,9 @@
         "https://www.digikey.com.au/*/products/detail/*",
         "https://www.digikey.ca/*/products/detail/*"
       ],
-      "js": ["content/digikey.js"],
+      "js": [
+        "content/digikey.js"
+      ],
       "run_at": "document_idle"
     },
     {
@@ -41,7 +44,9 @@
         "https://www.lcsc.com/product-detail/*",
         "https://lcsc.com/product-detail/*"
       ],
-      "js": ["content/lcsc.js"],
+      "js": [
+        "content/lcsc.js"
+      ],
       "run_at": "document_idle"
     }
   ],
@@ -52,10 +57,10 @@
     "default_path": "src/sidepanel/index.html"
   },
   "commands": {
-    "_execute_action": {
+    "open-finder": {
       "suggested_key": {
-        "default": "Ctrl+Shift+2",
-        "mac": "Command+Shift+2"
+        "default": "Ctrl+Shift+K",
+        "mac": "Command+Shift+K"
       },
       "description": "Open KiCad Part Finder"
     }
@@ -70,12 +75,16 @@
   },
   "web_accessible_resources": [
     {
+      "comment": "The finder UI loaded as an <iframe> by the in-page overlay (and the v1 float). index.html is the framed page; the JS/CSS/three.js chunks are its sub-resources (same-origin to the framed extension doc, listed defensively so the framed 3D preview loads on any host page).",
       "resources": [
         "src/sidepanel/index.html",
         "sidepanel/sidepanel.js",
-        "sidepanel/sidepanel.css"
+        "sidepanel/sidepanel.css",
+        "chunks/*.js"
       ],
-      "matches": ["<all_urls>"]
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }

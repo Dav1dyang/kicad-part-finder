@@ -23,6 +23,13 @@ export async function placeFiles(
 ): Promise<PlacedFile[]> {
   const placed: PlacedFile[] = [];
 
+  // Basenames of the 3D models in this batch + the directory they land in.
+  // Used to repair model references baked into footprints (see rewriteModelPaths).
+  const modelNames = new Set(
+    files.filter((f) => f.type === '3dmodel').map((f) => basename(f.filename))
+  );
+  const modelDir = expandHome(config.paths.model3dDir);
+
   for (const file of files) {
     // Reject filenames with path traversal characters
     if (file.filename.includes('..') || file.filename.includes('/') || file.filename.includes('\\')) {
@@ -32,14 +39,28 @@ export async function placeFiles(
     if (file.type === 'symbol') {
       const result = await mergeSymbol(file, config);
       if (result) placed.push(result);
-    } else {
+    } else if (file.type === 'footprint') {
       const targetPath = getTargetPath(file, config);
       if (!targetPath) continue;
 
-      const dir = join(targetPath, '..');
-      if (!existsSync(dir)) {
-        await mkdir(dir, { recursive: true });
-      }
+      await ensureParentDir(targetPath);
+
+      // Footprints are text. Repair any baked-in 3D-model paths so the model
+      // resolves from where we actually place it (easyeda2kicad writes the
+      // now-deleted conversion temp dir into each `(model ...)` line).
+      const raw = file.encoding === 'base64'
+        ? Buffer.from(file.content, 'base64').toString('utf-8')
+        : file.content;
+      const content = rewriteModelPaths(raw, modelDir, modelNames);
+
+      await writeFile(targetPath, content, 'utf-8');
+      placed.push({ type: file.type, path: targetPath });
+    } else {
+      // 3D models and any other binary asset — write verbatim.
+      const targetPath = getTargetPath(file, config);
+      if (!targetPath) continue;
+
+      await ensureParentDir(targetPath);
 
       const content = file.encoding === 'base64'
         ? Buffer.from(file.content, 'base64')
@@ -164,4 +185,38 @@ function expandHome(filepath: string): string {
     return join(homedir(), filepath.slice(2));
   }
   return filepath;
+}
+
+/** Ensure the parent directory of a file path exists. */
+async function ensureParentDir(filePath: string): Promise<void> {
+  const dir = join(filePath, '..');
+  if (!existsSync(dir)) {
+    await mkdir(dir, { recursive: true });
+  }
+}
+
+/**
+ * Repair 3D-model references inside a footprint.
+ *
+ * easyeda2kicad (and some SnapEDA exports) write an ABSOLUTE path to the
+ * conversion temp directory into each `(model "...")` line, e.g.
+ *   (model "/var/folders/.../T/kicad-part-XXXX/component.3dshapes/Foo.wrl" ...)
+ * That temp dir is deleted immediately after conversion, so KiCad can never
+ * find the model. We rewrite any model whose basename matches a model file we
+ * are installing in this batch to point at its final location. Standard
+ * references (e.g. `${KICAD9_3DMODEL_DIR}/...`) are left untouched because
+ * their basename is not part of the batch. KiCad accepts forward slashes on
+ * every platform, so we normalise to them.
+ */
+function rewriteModelPaths(
+  content: string,
+  modelDir: string,
+  modelNames: Set<string>
+): string {
+  if (modelNames.size === 0) return content;
+  const base = modelDir.replace(/\\/g, '/').replace(/\/+$/, '');
+  return content.replace(/\(model\s+"([^"]+)"/g, (whole, modelPath: string) => {
+    const name = modelPath.split(/[\\/]/).pop() ?? '';
+    return modelNames.has(name) ? `(model "${base}/${name}"` : whole;
+  });
 }
