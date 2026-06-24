@@ -1,7 +1,9 @@
 /**
  * Background service worker — routes messages between content scripts and the UI.
  * Detects sidePanel API support; on browsers that lack it (e.g. Arc) it opens the
- * same side-panel UI in a standalone popup window instead.
+ * same UI in a real browser TAB instead — a tab is a top-level context, so the
+ * panel's "Float on top" (Document Picture-in-Picture) works from there. A
+ * standalone popup window is kept as a fallback if a tab can't be created.
  * Injects a text selection listener when the UI is active so highlighting text
  * on any page triggers a component search.
  */
@@ -16,9 +18,13 @@ const detectedParts = new Map<number, DetectedPart>();
 const selectionListenerInjected = new Set<number>();
 // Id of the popup-window fallback (Arc et al.), if one is currently open.
 let finderWindowId: number | null = null;
+// Id of the finder TAB (no-sidePanel browsers), if one is currently open. A tab
+// is preferred over the popup window so Document PiP "Float on top" can be used.
+let finderTabId: number | null = null;
 
-// The side-panel UI document, reused as the popup-window fallback. Loadable via
-// chrome.runtime.getURL — extension pages are always reachable by the extension.
+// The side-panel UI document, reused as the tab / popup-window fallback. Loadable
+// via chrome.runtime.getURL — extension pages are always reachable by the
+// extension.
 const SIDEPANEL_PATH = 'src/sidepanel/index.html';
 
 /**
@@ -174,10 +180,12 @@ async function openFinder(tab?: chrome.tabs.Tab) {
     try {
       await chrome.sidePanel.open({ tabId });
     } catch {
-      await openFinderWindow(tabId);
+      await openFinderTab(tabId);
     }
   } else {
-    await openFinderWindow(tabId);
+    // No working side panel (e.g. Arc) → open the UI in a real TAB so its
+    // "Float on top" (Document PiP) button can request an always-on-top window.
+    await openFinderTab(tabId);
   }
 
   // Keep injecting the selection listener on the SOURCE tab so highlight-to-search
@@ -198,9 +206,51 @@ chrome.commands.onCommand.addListener((command, tab) => {
 });
 
 /**
- * Open the side-panel UI in a standalone popup window (fallback for browsers
- * without a working chrome.sidePanel, e.g. Arc). The originating tab id is passed
- * via `?tab=` so the UI can pre-fill the part detected on that page.
+ * Open the UI in a real browser TAB (the preferred fallback for browsers without
+ * a working chrome.sidePanel, e.g. Arc). A tab is a top-level browsing context,
+ * so the panel's "Float on top" (Document Picture-in-Picture) button can request
+ * an always-on-top window from it — which it cannot do from a side panel or an
+ * extension popup window.
+ *
+ * The originating tab id is passed via `?tab=` so the UI can pre-fill the part
+ * detected on that page (and so the UI knows it's running in a tab/popup, not a
+ * side panel). Only one finder tab is kept alive: if it's already open we focus
+ * it (re-pointing it at the new source tab) rather than spawning duplicates. If
+ * the tab can't be created for any reason, falls back to the popup window.
+ */
+async function openFinderTab(sourceTabId: number) {
+  const url = `${chrome.runtime.getURL(SIDEPANEL_PATH)}?tab=${sourceTabId}`;
+
+  // Reuse an existing finder tab if we have one.
+  if (finderTabId !== null) {
+    try {
+      const existing = await chrome.tabs.get(finderTabId);
+      await chrome.tabs.update(finderTabId, { url, active: true });
+      if (typeof existing.windowId === 'number') {
+        await chrome.windows.update(existing.windowId, { focused: true });
+      }
+      return;
+    } catch {
+      // The tracked tab vanished without an onRemoved — recreate below.
+      finderTabId = null;
+    }
+  }
+
+  try {
+    const tab = await chrome.tabs.create({ url, active: true });
+    finderTabId = typeof tab?.id === 'number' ? tab.id : null;
+  } catch (err) {
+    // Couldn't open a tab — fall back to the standalone popup window.
+    console.error('Failed to open finder tab; falling back to popup window:', err);
+    await openFinderWindow(sourceTabId);
+  }
+}
+
+/**
+ * Open the UI in a standalone popup window (last-resort fallback when a tab can't
+ * be created). The originating tab id is passed via `?tab=` so the UI can
+ * pre-fill the part detected on that page. NOTE: Document PiP "Float on top"
+ * cannot be requested from a popup window, so the panel hides that button here.
  *
  * Only one finder window is kept alive: if it's already open we focus it (and
  * re-point it at the new source tab) rather than spawning duplicates.
@@ -257,6 +307,9 @@ async function injectSelectionListener(tabId: number) {
 chrome.tabs.onRemoved.addListener((tabId) => {
   detectedParts.delete(tabId);
   selectionListenerInjected.delete(tabId);
+  // Stop tracking the finder tab once it's closed so the next open creates a
+  // fresh one instead of trying to focus a dead tab.
+  if (tabId === finderTabId) finderTabId = null;
 });
 
 // Stop tracking the finder popup window once it's closed.
