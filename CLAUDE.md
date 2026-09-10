@@ -58,6 +58,10 @@ Helper windows report back with `OVERLAY_HELPER_DONE`; the service worker rebroa
 - **Browser-level shortcuts cannot be set by the extension.** `chrome.commands.getAll()` reads them; changing one means sending the user to `chrome://extensions/shortcuts`. Panel shortcuts are ours and live in `src/lib/shortcuts.ts`.
 - **Pure logic goes in its own module with tests.** Everything under `src/lib` and the `preview-*`, `overlay-bounds`, `overlay-params`, `source-tab` modules is DOM-free and unit-tested. Keep it that way when adding features.
 
+## Chrome extension guidance
+
+Google's Modern Web Guidance skill for Chrome extensions is installed at `.claude/skills/chrome-extensions` (source in `.agents/skills/chrome-extensions`, pinned by `skills-lock.json`). Read its `SKILL.md` and the relevant `references/extensions/*.md` before touching the manifest, the service worker, content scripts, permissions, or the side panel. Two of its rules that matter here: `tab.url` is undefined without the `tabs` permission (we do not request it, so compare tab ids instead), and `activeTab` only applies to direct gestures such as the toolbar click or a command, never to a button inside the panel.
+
 ## Development
 
 ```bash

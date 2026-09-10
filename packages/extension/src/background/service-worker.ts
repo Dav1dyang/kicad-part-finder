@@ -466,10 +466,26 @@ async function searchSelection(tab?: chrome.tabs.Tab): Promise<void> {
 async function installCurrent(tab?: chrome.tabs.Tab): Promise<void> {
   const tabId = tab?.id ?? (await activeTabId());
   // In window/tab mode the active tab IS the finder page; tell it so it can
-  // match on its own tab id instead of its source tab.
-  const finderPrefix = chrome.runtime.getURL(SIDEPANEL_PATH);
-  const isFinderTab = typeof tab?.url === 'string' && tab.url.startsWith(finderPrefix);
+  // match on its own tab id instead of its source tab. Compare ids, not
+  // `tab.url`: reading a URL needs the `tabs` permission we don't request.
+  const isFinderTab = tabId !== null && (await finderTabIds()).includes(tabId);
   broadcast({ type: 'COMMAND', name: 'install-current', tabId, isFinderTab });
+}
+
+/** Tab ids of the finder's own documents (the finder tab and the finder window's tab). */
+async function finderTabIds(): Promise<number[]> {
+  const s = await getSession();
+  const ids: number[] = [];
+  if (s.finderTabId !== null) ids.push(s.finderTabId);
+  if (s.finderWindowId !== null) {
+    try {
+      const [view] = await chrome.tabs.query({ windowId: s.finderWindowId });
+      if (typeof view?.id === 'number') ids.push(view.id);
+    } catch {
+      /* window gone */
+    }
+  }
+  return ids;
 }
 
 /**
