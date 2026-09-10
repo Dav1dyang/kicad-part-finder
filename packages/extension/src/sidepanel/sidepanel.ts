@@ -1,24 +1,26 @@
 /**
- * Side panel UI — self-contained (no companion server).
+ * Side panel UI. Self-contained: no companion server.
  *
  * One calm surface with three states:
- *   • Readiness strip (always visible): Library + Relay status pills. Click to
- *     change. The full Setup view only takes over on first run / when something
- *     is missing; the relay URL field lives in a settings disclosure (gear).
- *   • Search: a prominent LCSC#/MPN input (auto-filled from a detected part),
- *     disabled with a hint until both library + relay are ready.
- *   • Result card → Install: MPN headline, a stock/price badge (from JLCPCB),
- *     editable metadata with empty/uncertain fields flagged amber, an auto-
- *     selected destination bucket, then a confident Install → loading → success
- *     state listing the written files, with "Install another" to reset.
+ *   • Readiness strip (always visible): Library + Relay pills. Click to change.
+ *     The Setup view takes over on first run or when something is missing; the
+ *     relay URL also lives in the Settings disclosure (gear).
+ *   • Search: LCSC#/MPN input, pre-filled from a detected part. Search and
+ *     previews need only the relay; the folder is needed at install time.
+ *   • Result card → Install: MPN headline, stock/price badge, editable metadata
+ *     (empty fields flagged amber), an auto-picked destination bucket, then a
+ *     confident Install → busy → success state listing the written files.
  *
- * Data flow is unchanged from before:
- *   relayUrl (chrome.storage.local) → service worker → relay → JLCPCB/EasyEDA.
- *   Install writes symbol/footprint/STEP via the File System Access API.
+ * The same document runs in five contexts (see CLAUDE.md): side panel, tab or
+ * popup window (`?tab=&win=1`), the in-page overlay iframe (`?overlay=1`), the
+ * folder-grant helper (`?win=1&setup=1`), and the install helper
+ * (`?win=1&install=C…`). File System Access is blocked inside the overlay's
+ * cross-origin iframe, so it delegates folder-pick and install to helper
+ * windows through the service worker.
  *
- * "Float on top" (Document Picture-in-Picture, see ./float.ts) moves the whole
- * `#app` node into an always-on-top window and back; it's feature-detected and
- * only offered where it can actually work.
+ * Keyboard shortcuts: browser-level commands are read from chrome.commands and
+ * changed on chrome://extensions/shortcuts; panel shortcuts are ours (see
+ * ../lib/shortcuts.ts) and are recorded in Settings.
  */
 
 import type { DetectedPart } from '@kicad-part-finder/shared';
@@ -27,18 +29,33 @@ import type { JlcMatch } from '../lib/jlcpcb.js';
 import { LIBRARY_CHOICES, categoryToBucket, type LibraryChoice } from '../lib/autosort.js';
 import {
   getSavedFolder,
+  peekSavedFolder,
   pickLibraryFolder,
   installPart,
+  type FolderPermission,
   type InstallPartResult,
 } from '../lib/library-writer.js';
 import { getSecondarySourceLinks } from '../lib/mpn-sources.js';
-import { parseSourceTabId, isWindowMode } from './source-tab.js';
+import { normalizeRelayUrl, prettyRelay, interpretRelayHealth } from '../lib/relay-url.js';
 import {
-  isOverlayMode,
-  isSetupMode,
-  parseInstallLcsc,
-  parseBucket,
-} from '../content/overlay-params.js';
+  PANEL_ACTIONS,
+  PANEL_ACTION_LABELS,
+  DEFAULT_PANEL_SHORTCUTS,
+  actionForCombo,
+  browserShortcutToKeyCaps,
+  comboFromKeys,
+  comboIsBareKey,
+  comboToKeyCaps,
+  detectPlatform,
+  parseCombo,
+  resolvePanelShortcuts,
+  serializeCombo,
+  validateCombo,
+  type PanelAction,
+  type Platform,
+} from '../lib/shortcuts.js';
+import { parseSourceTabId, isWindowMode } from './source-tab.js';
+import { isOverlayMode, isSetupMode, parseInstallLcsc, parseBucket } from '../content/overlay-params.js';
 import { isPipSupported, floatOnTop, type FloatHandle } from './float.js';
 import { createPreviewController, type PreviewController } from './preview-controller.js';
 
@@ -47,47 +64,55 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 
 const app = $('app');
 
-// Top bar
 const floatBtn = $<HTMLButtonElement>('floatBtn');
 const settingsBtn = $<HTMLButtonElement>('settingsBtn');
 const settingsPanel = $('settingsPanel');
 const floatingNote = $('floatingNote');
 const windowNote = $('windowNote');
 
-// Settings — open mode (3-way segmented selector: auto / window / overlay)
 const openModeSelector = $('openModeSelector');
 const windowModeNote = $('windowModeNote');
+const themeSelector = $('themeSelector');
+const selectionSearchToggle = $<HTMLInputElement>('selectionSearchToggle');
+const allSitesRow = $('allSitesRow');
+const allSitesBtn = $<HTMLButtonElement>('allSitesBtn');
+const browserShortcutsEl = $('browserShortcuts');
+const panelShortcutsEl = $('panelShortcuts');
+const resetShortcutsBtn = $<HTMLButtonElement>('resetShortcutsBtn');
 
-// Readiness strip
 const libPill = $<HTMLButtonElement>('libPill');
 const libPillValue = $('libPillValue');
 const relayPill = $<HTMLButtonElement>('relayPill');
 const relayPillValue = $('relayPillValue');
 
-// Setup view
 const setupView = $('setupView');
 const setupStepLib = $('setupStepLib');
 const setupStepRelay = $('setupStepRelay');
 const chooseFolderBtn = $<HTMLButtonElement>('chooseFolderBtn');
 const relayUrlInputSetup = $<HTMLInputElement>('relayUrlInputSetup');
+const relayTestBtnSetup = $<HTMLButtonElement>('relayTestBtnSetup');
+const relayNoteSetup = $('relayNoteSetup');
+const setupDoneBtn = $<HTMLButtonElement>('setupDoneBtn');
 
-// Settings
 const relayUrlInput = $<HTMLInputElement>('relayUrlInput');
+const relayTestBtn = $<HTMLButtonElement>('relayTestBtn');
+const relayNote = $('relayNote');
 
-// Search
 const searchInput = $<HTMLInputElement>('searchInput');
 const searchField = document.querySelector('.search-field') as HTMLElement;
 const searchBtn = $<HTMLButtonElement>('searchBtn');
 const searchHint = $('searchHint');
 const searchStatus = $('searchStatus');
+const detectedOffer = $('detectedOffer');
+const detectedOfferMpn = $('detectedOfferMpn');
+const detectedOfferBtn = $<HTMLButtonElement>('detectedOfferBtn');
+const detectedOfferDismiss = $<HTMLButtonElement>('detectedOfferDismiss');
 
-// Candidates
 const candidateSection = $('candidateSection');
-const candidateSelect = $<HTMLSelectElement>('candidateSelect');
+const candidateList = $('candidateList');
 
-// Card
 const partCard = $('partCard');
-const cardLcsc = $('cardLcsc');
+const cardLcsc = $<HTMLAnchorElement>('cardLcsc');
 const cardMpn = $('cardMpn');
 const cardSub = $('cardSub');
 const stockBadge = $('stockBadge');
@@ -99,132 +124,183 @@ const datasheetLink = $<HTMLAnchorElement>('datasheetLink');
 const flagMpn = $('flagMpn');
 const flagDatasheet = $('flagDatasheet');
 const bucketSelect = $<HTMLSelectElement>('bucketSelect');
+const destPath = $('destPath');
+const symbolAvail = $('symbolAvail');
+const footprintAvail = $('footprintAvail');
 const model3dAvail = $('model3dAvail');
 const installBtn = $<HTMLButtonElement>('installBtn');
+const installBtnText = $('installBtnText');
 const installStatus = $('installStatus');
 const successPanel = $('successPanel');
 const writtenList = $<HTMLUListElement>('writtenList');
+const restartNote = $('restartNote');
+const reloadNote = $('reloadNote');
 const installAnotherBtn = $<HTMLButtonElement>('installAnotherBtn');
+const closeHelperBtn = $<HTMLButtonElement>('closeHelperBtn');
 
-// Secondary sources
 const secondarySources = $('secondarySources');
 const sourceLinks = $('sourceLinks');
 
 // --- State -------------------------------------------------------------------
 let libraryFolder: FileSystemDirectoryHandle | null = null;
+let folderPermission: FolderPermission = 'none';
+/** Folder name when a handle exists but needs a click to re-grant. */
+let savedFolderName = '';
 let current: ConvertResult | null = null;
+let currentMatch: JlcMatch | null = null;
 let candidates: JlcMatch[] = [];
-// The deployed relay origin (chrome.storage.local `relayUrl`). All search /
-// convert / model fetches go through it; empty disables Search + Install.
 let relayUrl = '';
-// Debounce live highlight-to-search so rapid re-selections don't spam searches.
+/** Generation counter: any await in a search/convert checks it's still current. */
+let searchSeq = 0;
+let searchInFlight = false;
 let detectDebounce: ReturnType<typeof setTimeout> | null = null;
-// True while an install is mid-`await` (top-level or delegated). A live
-// PART_DETECTED broadcast must not re-run the search then — runSearch nulls
-// `current` synchronously, which would make onInstall's post-await deref throw.
 let installInFlight = false;
-// Overlay iframe only: true while a delegated folder-grant window is open. Guards
-// against a second OVERLAY_PICK_FOLDER (double-click on the Library pill) opening
-// a duplicate folder picker. Cleared on OVERLAY_FOLDER_READY / OVERLAY_FOLDER_DISMISSED.
+let overlayInstallWatchdog: ReturnType<typeof setTimeout> | null = null;
 let pickFolderInFlight = false;
-// Active Document PiP float, if any.
 let floatHandle: FloatHandle | null = null;
-// True when this document is the standalone floating popup window (URL `&win=1`).
-// Document PiP can't be used here, so the Float button is hidden and a tag shown.
+/** Keep the Setup view open while the user is working in it. */
+let setupPinned = false;
+/** The part offered (not forced) by the detected-part chip. */
+let offeredPart: DetectedPart | null = null;
+/** Side-panel mode: the tab (and window) this panel belongs to. */
+let myActiveTabId: number | null = null;
+let myWindowId: number | null = null;
+/** Tab/window mode: the id of the tab this finder page itself lives in. */
+let myOwnTabId: number | null = null;
+let selectionSearch = true;
+let panelShortcuts = resolvePanelShortcuts(undefined);
+const platform: Platform = detectPlatform(
+  (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform || navigator.platform,
+);
+/** The action currently being recorded in Settings, if any. */
+let recordingAction: PanelAction | null = null;
+/** The document the key handler is bound to (changes when floating in PiP). */
+let keyDocument: Document = document;
+
 const runningInWindow = isWindowMode(location.search);
-// True when this document is the finder UI running INSIDE the in-page overlay
-// iframe (`?overlay=1`). File System Access is blocked in that cross-origin
-// iframe, so folder-pick + install are delegated to a real window via the SW.
 const runningInOverlay = isOverlayMode(location.search);
-// True when this document is the one-time folder-grant helper window the SW
-// opens for the overlay (`?win=1&setup=1`): focus the picker, grant, close.
 const runningInSetup = isSetupMode(location.search);
-// The LCSC id this auto-install helper window must install (`?win=1&install=…`),
-// or null. Set → on load, auto-convert + install against the saved folder, then
-// close (no extra click when the folder grant is valid).
 const autoInstallLcsc = parseInstallLcsc(location.search);
-// chrome.storage.local key recording that the overlay's library folder is
-// granted (the overlay iframe can't hold the FS handle, so it tracks readiness
-// + the folder name here; the real handle lives in the helper windows' IndexedDB).
+const sourceTabId = parseSourceTabId(location.search);
+const runningInHelper = runningInSetup || autoInstallLcsc !== null;
+
 const OVERLAY_LIB_KEY = 'overlayLibraryName';
-// Mirror of OVERLAY_LIB_KEY for the overlay iframe (which has no real handle).
 let overlayLibraryName = '';
-// Symbol/Footprint/3D preview block in the result card (lazy per-tab render).
 let preview: PreviewController | null = null;
+
+/** Overlay installs that never report back are reset after this long. */
+const OVERLAY_INSTALL_WATCHDOG_MS = 120_000;
 
 // --- Init --------------------------------------------------------------------
 async function init() {
-  // Populate the destination bucket dropdown once.
+  // Register the message listener FIRST so nothing broadcast during the
+  // awaited setup below is missed.
+  chrome.runtime.onMessage.addListener(onRuntimeMessage);
+
   for (const choice of LIBRARY_CHOICES) {
     const opt = document.createElement('option');
     opt.value = choice;
-    opt.textContent =
-      choice === 'KiCadPartFinder' ? 'KiCadPartFinder (catch-all)' : `DavidLib_${choice}`;
+    opt.textContent = bucketLabel(choice);
     bucketSelect.appendChild(opt);
   }
 
-  // --- Readiness strip + setup wiring ---
-  libPill.addEventListener('click', onLibraryAction);
-  chooseFolderBtn.addEventListener('click', onLibraryAction);
+  // Readiness strip + setup.
+  libPill.addEventListener('click', () => void onLibraryAction());
+  chooseFolderBtn.addEventListener('click', () => void onLibraryAction());
   relayPill.addEventListener('click', () => {
-    // If the relay isn't set, open the inline setup; otherwise reveal settings.
     if (!hasRelay()) openSetupFocusRelay();
-    else toggleSettings(true);
+    else toggleSettings();
+  });
+  setupDoneBtn.addEventListener('click', () => {
+    setupPinned = false;
+    refreshReadiness();
+    searchInput.focus();
   });
 
-  // --- Settings disclosure ---
+  // Settings.
   settingsBtn.addEventListener('click', () => toggleSettings());
-  // Keep the two relay inputs (settings + setup) mirrored and persisted. Persist
-  // live on input (without rewriting the field being typed in — that jumps the
-  // caret + strips trailing spaces mid-type); normalize the displayed value on blur.
-  relayUrlInput.addEventListener('input', () => void onRelayUrlChange(relayUrlInput.value, relayUrlInput));
-  relayUrlInputSetup.addEventListener('input', () => void onRelayUrlChange(relayUrlInputSetup.value, relayUrlInputSetup));
-  relayUrlInput.addEventListener('blur', () => normalizeRelayInput(relayUrlInput));
-  relayUrlInputSetup.addEventListener('blur', () => normalizeRelayInput(relayUrlInputSetup));
-  // Open-mode selector: side panel/tab (auto) · floating window · in-page overlay.
+  for (const input of [relayUrlInput, relayUrlInputSetup]) {
+    input.addEventListener('input', () => void onRelayUrlChange(input));
+    input.addEventListener('blur', () => normalizeRelayInput(input));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.isComposing) {
+        e.preventDefault();
+        normalizeRelayInput(input);
+        void testRelay(input === relayUrlInput ? relayNote : relayNoteSetup, input);
+      }
+    });
+  }
+  relayTestBtn.addEventListener('click', () => void testRelay(relayNote, relayUrlInput));
+  relayTestBtnSetup.addEventListener('click', () => void testRelay(relayNoteSetup, relayUrlInputSetup));
   openModeSelector.addEventListener('change', (e) => {
     const target = e.target as HTMLInputElement;
     if (target?.name === 'openMode') void onOpenModeChange(target.value);
   });
+  themeSelector.addEventListener('change', (e) => {
+    const target = e.target as HTMLInputElement;
+    if (target?.name === 'theme') void onThemeChange(target.value);
+  });
+  selectionSearchToggle.addEventListener('change', () => void onSelectionSearchChange());
+  allSitesBtn.addEventListener('click', () => void requestAllSites());
+  resetShortcutsBtn.addEventListener('click', () => void resetPanelShortcuts());
 
-  // --- Search ---
-  searchBtn.addEventListener('click', () => void runSearch(searchInput.value.trim()));
+  // Search.
+  searchBtn.addEventListener('click', () => void runSearch(searchInput.value));
   searchInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') void runSearch(searchInput.value.trim());
+    // Ignore the Enter that commits an IME composition (Chinese/Japanese input).
+    if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
+      e.preventDefault();
+      void runSearch(searchInput.value);
+    }
   });
-  candidateSelect.addEventListener('change', () => {
-    const m = candidates[candidateSelect.selectedIndex];
-    if (m) void convertAndShow(m.lcscId, m);
+  detectedOfferBtn.addEventListener('click', () => {
+    if (!offeredPart) return;
+    const text = offeredPart.lcscId || offeredPart.mpn;
+    hideOffer();
+    searchInput.value = text;
+    void runSearch(text);
   });
+  detectedOfferDismiss.addEventListener('click', hideOffer);
 
-  // --- Install ---
+  // Card.
   installBtn.addEventListener('click', () => void onInstall());
   installAnotherBtn.addEventListener('click', resetForAnother);
+  closeHelperBtn.addEventListener('click', () => window.close());
+  bucketSelect.addEventListener('change', () => {
+    updateDestPath();
+    rearmInstallButton();
+  });
 
-  // --- Previews (Symbol · Footprint · 3D) ---
   preview = createPreviewController(partCard);
-
-  // --- Float on top (Document PiP) ---
   setupFloatButton();
+  bindKeys(document);
 
-  // Load the saved relay URL + open-mode preference. Until the relay is set,
-  // search/convert/install are disabled and the setup view nudges the user.
+  // Stored settings.
   try {
-    const stored = await chrome.storage.local.get(['relayUrl', 'openMode']);
-    relayUrl = typeof stored.relayUrl === 'string' ? stored.relayUrl.trim() : '';
-    // Missing/unknown openMode → 'auto' (default). Reflect it in the selector.
+    const stored = await chrome.storage.local.get(['relayUrl', 'openMode', 'theme', 'selectionSearch']);
+    relayUrl = normalizeRelayUrl(typeof stored.relayUrl === 'string' ? stored.relayUrl : '').url;
     selectOpenMode(normalizeOpenMode(stored.openMode));
+    applyTheme(normalizeTheme(stored.theme));
+    selectionSearch = stored.selectionSearch !== false;
   } catch {
     relayUrl = '';
+    applyTheme('system');
   }
   relayUrlInput.value = relayUrl;
   relayUrlInputSetup.value = relayUrl;
+  selectionSearchToggle.checked = selectionSearch;
+  void refreshAllSitesRow();
+  await loadPanelShortcuts();
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'sync' && changes.panelShortcuts) {
+      panelShortcuts = resolvePanelShortcuts(changes.panelShortcuts.newValue);
+      renderPanelShortcuts();
+      renderKeyHints();
+    }
+  });
 
+  // Library folder.
   if (runningInOverlay) {
-    // Inside the overlay iframe FS-Access is blocked, so we can't hold the real
-    // directory handle. Track readiness via chrome.storage (shared across all
-    // extension contexts, unlike the partitioned iframe IndexedDB): the helper
-    // windows record the granted folder's name there.
     try {
       const stored = await chrome.storage.local.get(OVERLAY_LIB_KEY);
       overlayLibraryName = typeof stored[OVERLAY_LIB_KEY] === 'string' ? stored[OVERLAY_LIB_KEY] : '';
@@ -232,104 +308,161 @@ async function init() {
       overlayLibraryName = '';
     }
   } else {
-    // Top-level document (side panel / tab / window / helper): silently restore
-    // the saved folder. Chrome requires a user gesture to (re-)grant permission,
-    // so if the grant lapsed we leave the pill to prompt.
-    try {
-      const saved = await getSavedFolder();
-      if (saved) libraryFolder = saved;
-    } catch {
-      /* needs a gesture — user clicks the Library pill / "Choose folder" */
-    }
+    await refreshFolderState();
   }
 
   refreshReadiness();
-
-  // Pre-fill from a detected part (DigiKey/LCSC content script), if any.
-  //  - Side-panel mode: no `?tab=` → service worker reads the active tab.
-  //  - Tab / popup mode: `?tab=<id>` identifies the originating page.
-  const sourceTabId = parseSourceTabId(location.search);
-  try {
-    const msg =
-      sourceTabId === null
-        ? { type: 'GET_DETECTED_PART' }
-        : { type: 'GET_DETECTED_PART', tabId: sourceTabId };
-    const resp = await chrome.runtime.sendMessage(msg);
-    const part = resp?.part as DetectedPart | undefined;
-    if (part) {
-      searchInput.value = part.lcscId || part.mpn || '';
-    }
-  } catch {
-    /* no detected part */
-  }
-
-  // React to live detections while the UI is open. A highlighted selection (or
-  // any detected part) fills the box AND auto-runs the search — debounced so
-  // dragging across text doesn't fire a search per character. Also (overlay
-  // iframe only) refresh readiness when a delegated folder-grant / install
-  // window finishes.
-  chrome.runtime.onMessage.addListener((message) => {
-    if (message.type === 'PART_DETECTED' && message.part) {
-      // Helper windows (`?win=1&setup=1` / `&install=`) are single-purpose: they
-      // convert + install the part the SW handed them, then close. A live
-      // detection from another page must NOT hijack them into searching a
-      // different part. Likewise, never auto-search while an install is mid-flight
-      // — runSearch nulls `current` synchronously, which would crash onInstall's
-      // post-await deref (and re-point a helper at the wrong part).
-      if (runningInSetup || autoInstallLcsc || installInFlight) return;
-      const part = message.part as DetectedPart;
-      const text = part.lcscId || part.mpn || '';
-      if (!text) return;
-      searchInput.value = text;
-      if (detectDebounce) clearTimeout(detectDebounce);
-      detectDebounce = setTimeout(() => {
-        // Re-check at fire time: an install may have started during the debounce.
-        if (installInFlight) return;
-        void runSearch(searchInput.value.trim());
-      }, 350);
-    } else if (runningInOverlay && message.type === 'OVERLAY_FOLDER_READY') {
-      // The delegated folder grant succeeded — clear the in-flight guard + re-
-      // enable the Library pill, then refresh readiness from the recorded name.
-      pickFolderInFlight = false;
-      libPill.disabled = false;
-      void refreshOverlayReadiness();
-    } else if (runningInOverlay && message.type === 'OVERLAY_FOLDER_DISMISSED') {
-      // The grant window closed without granting (cancelled / closed) — re-enable
-      // the Library pill so the user can try again.
-      pickFolderInFlight = false;
-      libPill.disabled = false;
-      setStatus(searchStatus, 'Folder not granted — click Library to try again.', 'error');
-    } else if (runningInOverlay && message.type === 'OVERLAY_INSTALLED') {
-      installInFlight = false;
-      void refreshOverlayReadiness();
-      markOverlayInstalled();
-    } else if (runningInOverlay && message.type === 'OVERLAY_INSTALL_FAILED') {
-      // The delegated install ended without success (convert/install failed, the
-      // helper window was closed, or the folder grant lapsed). Reset the Install
-      // button out of its busy/disabled "Installing in a window…" state and
-      // surface a short hint so the user can retry instead of waiting forever.
-      installInFlight = false;
-      void refreshOverlayReadiness();
-      markOverlayInstallFailed(message.needsFolder === true);
-    }
+  void renderBrowserShortcuts();
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) void renderBrowserShortcuts();
   });
 
-  // Helper-window jobs the service worker opened on the overlay's behalf. These
-  // run LAST so all the wiring + saved state above is in place first.
-  if (runningInSetup) {
-    void runFolderGrantHelper();
-  } else if (autoInstallLcsc) {
-    void runAutoInstallHelper(autoInstallLcsc);
+  // Which tab/window does this document belong to?
+  try {
+    myWindowId = (await chrome.windows.getCurrent()).id ?? null;
+  } catch {
+    myWindowId = null;
+  }
+  try {
+    myOwnTabId = (await chrome.tabs.getCurrent())?.id ?? null;
+  } catch {
+    myOwnTabId = null;
+  }
+
+  // Pre-fill from the detected part.
+  if (!runningInHelper) {
+    try {
+      const msg = sourceTabId === null ? { type: 'GET_DETECTED_PART' } : { type: 'GET_DETECTED_PART', tabId: sourceTabId };
+      const resp = await chrome.runtime.sendMessage(msg);
+      if (typeof resp?.tabId === 'number') myActiveTabId = resp.tabId;
+      const part = resp?.part as DetectedPart | undefined;
+      if (part && (part.source !== 'selection' || selectionSearch || part.autoSearch)) {
+        searchInput.value = part.lcscId || part.mpn || '';
+        if (part.autoSearch) void runSearch(searchInput.value);
+      }
+    } catch {
+      /* no detected part */
+    }
+  }
+
+  // Tell the overlay content script the frame is alive (its CSP watchdog).
+  if (runningInOverlay) {
+    try {
+      window.parent.postMessage({ type: 'kicad-overlay-ready' }, '*');
+    } catch {
+      /* not framed */
+    }
+  }
+
+  if (runningInSetup) runFolderGrantHelper();
+  else if (autoInstallLcsc) void runAutoInstallHelper(autoInstallLcsc);
+  else if (!runningInOverlay) searchInput.focus();
+}
+
+// --- Runtime messages ----------------------------------------------------------
+
+/** Does a message about `tabId` concern THIS finder document? */
+function concernsMe(tabId: number | undefined): boolean {
+  if (typeof tabId !== 'number') return true; // unknown origin: don't drop it
+  if (sourceTabId !== null) return tabId === sourceTabId;
+  if (myActiveTabId !== null) return tabId === myActiveTabId;
+  return true;
+}
+
+function onRuntimeMessage(message: any, sender: chrome.runtime.MessageSender): void {
+  if (!message || typeof message !== 'object') return;
+
+  if (message.type === 'PART_DETECTED' && message.part) {
+    if (runningInHelper) return; // single-purpose windows never re-search
+    const tabId = typeof message.tabId === 'number' ? message.tabId : sender.tab?.id;
+    if (!concernsMe(tabId)) return;
+    const part = message.part as DetectedPart;
+    if (part.source === 'selection' && !selectionSearch && !message.viaCommand) return;
+    offerOrSearch(part, Boolean(message.viaCommand));
+    return;
+  }
+
+  if (message.type === 'TAB_ACTIVATED') {
+    // Side-panel mode follows the active tab of its window.
+    if (sourceTabId !== null || runningInHelper || runningInOverlay) return;
+    if (myWindowId !== null && message.windowId !== myWindowId) return;
+    myActiveTabId = typeof message.tabId === 'number' ? message.tabId : myActiveTabId;
+    if (message.part) offerOrSearch(message.part as DetectedPart, false);
+    return;
+  }
+
+  if (message.type === 'COMMAND' && message.name === 'install-current') {
+    if (runningInHelper) return;
+    const mine = message.isFinderTab
+      ? typeof message.tabId === 'number' && message.tabId === myOwnTabId
+      : concernsMe(message.tabId);
+    if (!mine) return;
+    if (!installBtn.disabled) void onInstall();
+    return;
+  }
+
+  if (!runningInOverlay) return;
+
+  if (message.type === 'OVERLAY_FOLDER_READY') {
+    pickFolderInFlight = false;
+    libPill.disabled = false;
+    hide(searchStatus);
+    void refreshOverlayReadiness();
+  } else if (message.type === 'OVERLAY_FOLDER_DISMISSED') {
+    pickFolderInFlight = false;
+    libPill.disabled = false;
+    setStatus(searchStatus, 'Folder access was not granted. Click Library to try again.', 'error');
+  } else if (message.type === 'OVERLAY_INSTALLED') {
+    clearOverlayWatchdog();
+    installInFlight = false;
+    void refreshOverlayReadiness();
+    markOverlayInstalled();
+  } else if (message.type === 'OVERLAY_INSTALL_FAILED') {
+    clearOverlayWatchdog();
+    installInFlight = false;
+    void refreshOverlayReadiness();
+    markOverlayInstallFailed(message.needsFolder === true, typeof message.error === 'string' ? message.error : '');
   }
 }
 
-// --- Overlay delegation (iframe ↔ service worker ↔ helper window) -------------
-
 /**
- * Re-read the overlay's library readiness from chrome.storage after a delegated
- * folder-grant finishes, and refresh the pills/search/install gating. Overlay-
- * iframe only (it has no real FS handle to restore).
+ * A part was detected for this document's tab. Search it right away when the
+ * panel is idle; otherwise offer it in a chip so nothing the user is doing is
+ * thrown away. An explicit command ("Search highlighted text") always searches.
  */
+function offerOrSearch(part: DetectedPart, force: boolean): void {
+  const text = part.lcscId || part.mpn || '';
+  if (!text) return;
+  const typing = document.activeElement === searchInput && searchInput.value.trim() !== '';
+  const busy = installInFlight || searchInFlight;
+  const cardShowing = !partCard.classList.contains('hidden');
+  const sameAsCurrent = current && (current.meta.lcsc === text || current.meta.mpn === text);
+
+  if (!force && (typing || busy || (cardShowing && !sameAsCurrent && part.source !== 'selection'))) {
+    if (sameAsCurrent) return;
+    offeredPart = part;
+    setText(detectedOfferMpn, text);
+    show(detectedOffer);
+    return;
+  }
+  if (sameAsCurrent) return;
+  hideOffer();
+  searchInput.value = text;
+  if (detectDebounce) clearTimeout(detectDebounce);
+  detectDebounce = setTimeout(() => {
+    detectDebounce = null;
+    if (installInFlight) return;
+    void runSearch(searchInput.value);
+  }, force ? 0 : 350);
+}
+
+function hideOffer(): void {
+  offeredPart = null;
+  hide(detectedOffer);
+}
+
+// --- Overlay delegation ---------------------------------------------------------
+
 async function refreshOverlayReadiness() {
   try {
     const stored = await chrome.storage.local.get(OVERLAY_LIB_KEY);
@@ -340,181 +473,118 @@ async function refreshOverlayReadiness() {
   refreshReadiness();
 }
 
-/** Briefly reflect a successful delegated install in the overlay iframe's card. */
-function markOverlayInstalled() {
-  if (current) {
-    installBtn.textContent = 'Installed ✓';
-    installBtn.className = 'btn btn-primary is-done';
-    installBtn.disabled = true;
-    setStatus(installStatus, 'Installed via helper window.', 'success');
-  }
+function clearOverlayWatchdog() {
+  if (overlayInstallWatchdog) clearTimeout(overlayInstallWatchdog);
+  overlayInstallWatchdog = null;
 }
 
-/**
- * Reset the overlay iframe's Install button out of the "Installing in a window…"
- * busy/disabled state after a delegated install ended without success, and
- * surface a short retry hint. `needsFolder` distinguishes the lapsed-permission
- * case (point the user at the popup window that's asking for the folder) from a
- * genuine convert/install failure (just retry). Without this the button stays
- * stuck on "Installing in a window…" forever.
- */
-function markOverlayInstallFailed(needsFolder: boolean) {
-  // Clear the busy state so the button is clickable again. refreshInstallEnabled()
-  // then re-derives the disabled state from current readiness (relay + folder).
-  installBtn.textContent = needsFolder ? 'Grant the folder, then retry' : 'Install failed — try again';
-  installBtn.className = 'btn btn-primary';
+function markOverlayInstalled() {
+  if (!current) return;
+  setInstallButton('done', `Installed ${current.meta.mpn || current.meta.lcsc}`);
+  setStatus(installStatus, `Installed into ${bucketLabel(bucketSelect.value)}.`, 'success');
+  hide(restartNote);
+  show(reloadNote);
+  writtenList.textContent = '';
+  show(successPanel);
+  installAnotherBtn.focus();
+}
+
+function markOverlayInstallFailed(needsFolder: boolean, error: string) {
+  setInstallButton('error', needsFolder ? 'Grant folder access to finish' : 'Install failed. Retry');
   refreshInstallEnabled();
   setStatus(
     installStatus,
     needsFolder
-      ? 'Grant your library folder in the popup window, then it installs.'
-      : 'Install failed — try again.',
+      ? 'Grant your library folder in the small window that opened. The install continues there.'
+      : error || 'Install failed. Try again.',
     'error',
   );
 }
 
-/**
- * Setup helper window (`?win=1&setup=1`): surface the setup view and focus the
- * "Choose folder" button so the user grants access in a single click.
- *
- * We can't call the picker on load — `showDirectoryPicker` needs a user gesture,
- * and the gesture that opened this window doesn't carry into it. So the actual
- * grant happens in `onLibraryAction` (click handler); when it succeeds in setup
- * mode it records the folder name + finishes the helper (see `afterGrantInHelper`).
- */
 function runFolderGrantHelper() {
-  setupView.classList.remove('hidden');
-  setStatus(searchStatus, 'Choose your KiCad library folder to finish setup.', 'loading');
-  // Focus the button so a single Enter/click grants the folder.
+  setupPinned = true;
+  refreshReadiness();
+  setStatus(searchStatus, 'Choose your KiCad library folder to finish. This window closes by itself.', 'info');
   chooseFolderBtn.focus();
 }
 
-/**
- * Called after a successful folder grant inside a helper window. In pure setup
- * mode it finishes + closes the helper (the folder name was already recorded to
- * chrome.storage by the caller). Returns true if it closed the helper.
- */
 function afterGrantInHelper(handle: FileSystemDirectoryHandle): boolean {
   if (runningInSetup) {
-    setStatus(searchStatus, `Granted “${handle.name}” ✓`, 'success');
+    setStatus(searchStatus, `Granted “${handle.name}”.`, 'success');
     void finishHelper('folder');
     return true;
   }
   return false;
 }
 
-/**
- * Install helper window (`?win=1&install=<lcscId>&bucket=<bucket>`): auto-convert
- * the part via the relay and write it with the saved folder handle, render the
- * success state, then self-close — NO extra click when the folder grant is valid.
- *
- * If the folder isn't granted / the permission lapsed, `getSavedFolder()` above
- * returned null; we show the "Choose folder" button (a single click) and, once
- * granted, the user clicks Install — the converted card is already on screen.
- */
 async function runAutoInstallHelper(lcscId: string) {
-  // Convert first so the card (and its editable metadata) is on screen whether or
-  // not the folder is ready.
-  await convertAndShow(lcscId, null);
+  await convertAndShow(lcscId, null, undefined, ++searchSeq);
   if (!current) {
-    // Convert failed — the status already explains why. Tell the overlay so it
-    // un-sticks its "Installing in a window…" button instead of waiting forever.
-    void finishHelper('failed');
+    void finishHelper('failed', searchStatus.textContent || 'Conversion failed.');
+    show(closeHelperBtn);
+    show(successPanel);
     return;
   }
-
-  // Honor an explicit destination bucket from the URL (the overlay passes the
-  // user's chosen bucket); otherwise the auto-sorted default from showCard stays.
   const wantBucket = parseBucket(location.search, LIBRARY_CHOICES);
   if (wantBucket) bucketSelect.value = wantBucket;
+  updateDestPath();
 
   if (!libraryFolder) {
-    // Permission lapsed / never granted (getSavedFolder couldn't re-grant without
-    // a gesture). The always-visible "Library" pill grants it; clicking it grants
-    // AND — via onLibraryAction's helper-mode branch — proceeds straight to the
-    // install, so it's a single click. The converted card is already on screen.
-    // Tell the overlay it needs a folder so it resets its button + surfaces a hint
-    // (otherwise it stays stuck on "Installing in a window…" forever). We DON'T
-    // close this helper — the user grants the folder right here, in this window.
     libPill.focus();
-    setStatus(installStatus, 'Click the Library pill to confirm your folder, then it installs.', 'loading');
+    setStatus(installStatus, 'Click the Library pill to confirm your folder. The part installs right after.', 'info');
     void notifyOverlay('needs-folder');
     return;
   }
-
-  // Folder is valid → install immediately, then finish (success or failure).
   await onInstall();
-  void finishHelper(installBtn.classList.contains('is-done') ? 'installed' : 'failed');
+  await finishInstallHelper();
 }
 
-/** A helper-window job's terminal outcome, broadcast back to the overlay iframe. */
+/** After an install in the helper: report the outcome and close on success. */
+async function finishInstallHelper() {
+  if (installBtn.classList.contains('is-done')) {
+    void finishHelper('installed');
+  } else {
+    void notifyOverlay('failed', installStatus.textContent || 'Install failed.');
+    show(closeHelperBtn);
+    show(successPanel);
+  }
+}
+
 type HelperOutcome = 'folder' | 'installed' | 'failed' | 'needs-folder';
 
-/**
- * Tell the SW the helper job reached a terminal outcome so it can broadcast the
- * matching signal to the overlay iframe (folder-ready / installed / install-
- * failed). Does NOT close this window — used on its own for `needs-folder`, where
- * the helper must stay open so the user can grant the folder right here.
- *
- * We pass our own window id in the message: `sender.tab` is undefined for a
- * message sent from a popup-window extension page in MV3, so the SW can't derive
- * the window to force-close from the sender alone.
- */
-async function notifyOverlay(kind: HelperOutcome) {
+async function notifyOverlay(kind: HelperOutcome, error = '') {
   let windowId: number | undefined;
   try {
     windowId = (await chrome.windows.getCurrent()).id;
   } catch {
-    /* not available — the SW just won't have a safety-net close */
+    /* no safety-net close then */
   }
   try {
-    void chrome.runtime.sendMessage({ type: 'OVERLAY_HELPER_DONE', kind, windowId }).catch(() => {});
+    await chrome.runtime.sendMessage({ type: 'OVERLAY_HELPER_DONE', kind, windowId, error });
   } catch {
-    /* SW unreachable — the self-close (if any) still tidies up */
+    /* worker unreachable */
   }
 }
 
-/**
- * Wrap up a helper-window job: notify the SW (which broadcasts to the overlay so
- * it reflects readiness / "Installed ✓" / "Install failed" right away), keep the
- * terminal state on screen ~1.2s, then self-close. The SW also closes us after a
- * grace period as a safety net if `window.close()` is blocked.
- *
- * Called on EVERY terminal outcome that ends the helper — success ('installed'/
- * 'folder') AND failure ('failed') — so the overlay never stays stuck on
- * "Installing in a window…". The lapsed-folder case ('needs-folder') uses
- * `notifyOverlay` directly instead, since that window stays open for the grant.
- */
-async function finishHelper(kind: HelperOutcome) {
-  await notifyOverlay(kind);
+async function finishHelper(kind: HelperOutcome, error = '') {
+  await notifyOverlay(kind, error);
+  if (kind === 'failed') return; // stay open so the error can be read
   setTimeout(() => {
     try {
       window.close();
     } catch {
-      /* close blocked — the SW's grace-period close handles it */
+      /* the worker closes us after a grace period */
     }
   }, 1200);
 }
 
-// --- Float on top (Document Picture-in-Picture) ------------------------------
-/**
- * Wire up the Float button. Shown only where Document PiP is available AND we're
- * not already in the standalone floating window (Document PiP can't be requested
- * from a popup window — `requestWindow` rejects — so the button is pointless
- * there; we show a "Floating window" tag instead). The PiP window also can't be
- * requested from a side panel, so if `requestWindow` rejects at click time we
- * hide the button and explain once.
- */
+// --- Float on top ----------------------------------------------------------------
+
 function setupFloatButton() {
-  // Inside the overlay iframe, or a transient folder-grant / install helper
-  // window: Document PiP is pointless (the overlay already floats; the helper
-  // closes itself). Hide the button and skip the "Floating window" tag.
-  if (runningInOverlay || runningInSetup || autoInstallLcsc) {
+  if (runningInOverlay || runningInHelper) {
     floatBtn.classList.add('hidden');
     return;
   }
-  // Running inside the standalone popup window (service worker added `&win=1`):
-  // hide Float entirely and surface a subtle "Floating window" tag.
   if (runningInWindow) {
     floatBtn.classList.add('hidden');
     windowNote.classList.remove('hidden');
@@ -529,7 +599,6 @@ function setupFloatButton() {
 }
 
 async function onToggleFloat() {
-  // Already floating → bring it back.
   if (floatHandle) {
     floatHandle.close();
     return;
@@ -537,378 +606,796 @@ async function onToggleFloat() {
   try {
     floatHandle = await floatOnTop({
       root: app,
-      onEnter: () => {
+      onEnter: (pipWindow) => {
         floatingNote.classList.remove('hidden');
         floatBtn.classList.add('is-active');
-        floatBtn.title = 'Return from floating window';
+        floatBtn.title = 'Return from the floating window';
         setText(floatBtn.querySelector('.icon-label'), 'Floating');
+        bindKeys(pipWindow.document);
+        pipWindow.document.addEventListener('visibilitychange', () => preview?.refresh());
+        preview?.refresh();
       },
       onLeave: () => {
         floatHandle = null;
         floatingNote.classList.add('hidden');
         floatBtn.classList.remove('is-active');
-        floatBtn.title = 'Float on top — always-on-top window';
+        floatBtn.title = 'Float on top in an always-on-top window';
         setText(floatBtn.querySelector('.icon-label'), 'Float');
+        bindKeys(document);
+        preview?.refresh();
       },
     });
   } catch {
-    // Most likely: called from a context that can't open Document PiP (a side
-    // panel or extension popup). Hide the button and leave a one-line note.
     floatHandle = null;
     floatBtn.classList.add('hidden');
-    setStatus(
-      searchStatus,
-      'Floating needs a normal browser tab — open the finder in a tab to float it.',
-      'error',
-    );
+    setStatus(searchStatus, 'Floating needs a normal browser tab. Open the finder in a tab to float it.', 'error');
   }
 }
 
-// --- Settings disclosure -----------------------------------------------------
+// --- Settings --------------------------------------------------------------------
+
 function toggleSettings(forceOpen?: boolean) {
   const open = forceOpen ?? settingsPanel.classList.contains('hidden');
   settingsPanel.classList.toggle('hidden', !open);
   settingsBtn.setAttribute('aria-expanded', String(open));
   if (open) {
-    // Keep the field in sync and focus it for a quick edit.
     relayUrlInput.value = relayUrl;
+    void renderBrowserShortcuts();
+    refreshReadiness();
     relayUrlInput.focus();
+  } else {
+    cancelRecording();
+    refreshReadiness();
   }
 }
 
-// --- Open mode (side panel/tab · floating window · in-page overlay) ----------
 type OpenMode = 'auto' | 'window' | 'overlay';
-
-/** Coerce a stored value to a known open mode (missing/unknown → 'auto'). */
 function normalizeOpenMode(value: unknown): OpenMode {
   return value === 'window' || value === 'overlay' ? value : 'auto';
 }
-
-/** How THIS document was actually opened (for the "applies next time" note). */
 function currentDocumentMode(): OpenMode {
   if (runningInOverlay) return 'overlay';
   if (runningInWindow) return 'window';
   return 'auto';
 }
-
-/** Check the matching radio in the segmented selector. */
 function selectOpenMode(mode: OpenMode) {
-  const input = openModeSelector.querySelector<HTMLInputElement>(
-    `input[name="openMode"][value="${mode}"]`,
-  );
+  const input = openModeSelector.querySelector<HTMLInputElement>(`input[name="openMode"][value="${mode}"]`);
   if (input) input.checked = true;
 }
-
-/**
- * Persist the chosen open mode and make the change discoverable. The new mode
- * only takes effect the *next* time the finder is opened (we can't re-home the
- * live document mid-task), so we surface a clear "reopen to apply" note whenever
- * the choice differs from how THIS document was actually opened.
- */
 async function onOpenModeChange(value: string) {
   const mode = normalizeOpenMode(value);
   try {
     await chrome.storage.local.set({ openMode: mode });
   } catch {
-    /* storage unavailable — keep the in-memory selection for this session */
+    /* keep the in-memory choice */
   }
-
-  const changesCurrent = mode !== currentDocumentMode();
-  windowModeNote.textContent =
-    mode === 'overlay'
-      ? 'Reopen the finder via the toolbar icon to show it as an in-page overlay.'
-      : mode === 'window'
-        ? 'Reopen the finder via the toolbar icon to float it in a window.'
-        : 'Reopen the finder via the toolbar icon to apply.';
-  windowModeNote.classList.toggle('hidden', !changesCurrent);
+  windowModeNote.classList.toggle('hidden', mode === currentDocumentMode());
 }
 
-// --- Library folder ----------------------------------------------------------
-async function onLibraryAction() {
-  // Overlay iframe: the folder picker is blocked here. Delegate to a real window
-  // via the SW (which opens `?win=1&setup=1`, grants, then broadcasts back).
+type Theme = 'system' | 'dark' | 'light';
+function normalizeTheme(value: unknown): Theme {
+  return value === 'dark' || value === 'light' ? value : 'system';
+}
+function applyTheme(theme: Theme) {
+  const root = document.documentElement;
+  if (theme === 'system') root.removeAttribute('data-theme');
+  else root.setAttribute('data-theme', theme);
+  // Keep a floating PiP document in step.
+  const pipDoc = floatHandle?.pipWindow.document;
+  if (pipDoc) {
+    if (theme === 'system') pipDoc.documentElement.removeAttribute('data-theme');
+    else pipDoc.documentElement.setAttribute('data-theme', theme);
+  }
+  const input = themeSelector.querySelector<HTMLInputElement>(`input[name="theme"][value="${theme}"]`);
+  if (input) input.checked = true;
+}
+async function onThemeChange(value: string) {
+  const theme = normalizeTheme(value);
+  applyTheme(theme);
+  try {
+    await chrome.storage.local.set({ theme });
+  } catch {
+    /* keep for this session */
+  }
+}
+
+async function onSelectionSearchChange() {
+  selectionSearch = selectionSearchToggle.checked;
+  try {
+    await chrome.storage.local.set({ selectionSearch });
+  } catch {
+    /* keep for this session */
+  }
+  void refreshAllSitesRow();
+}
+
+/** Show the "allow on all sites" nudge only while the toggle is on and the grant is missing. */
+async function refreshAllSitesRow() {
+  if (!selectionSearch) {
+    hide(allSitesRow);
+    return;
+  }
+  try {
+    const has = await chrome.permissions.contains({ origins: ['https://*/*'] });
+    allSitesRow.classList.toggle('hidden', has);
+  } catch {
+    hide(allSitesRow);
+  }
+}
+
+async function requestAllSites() {
+  try {
+    const granted = await chrome.permissions.request({ origins: ['https://*/*', 'http://*/*'] });
+    if (!granted) setStatus(searchStatus, 'Not allowed. Highlight-to-search keeps working on the page where you open the finder.', 'info');
+  } catch {
+    /* the request needs a click; ignore */
+  }
+  void refreshAllSitesRow();
+}
+
+// --- Keyboard shortcuts ------------------------------------------------------------
+
+async function loadPanelShortcuts() {
+  try {
+    const stored = await chrome.storage.sync.get('panelShortcuts');
+    panelShortcuts = resolvePanelShortcuts(stored.panelShortcuts);
+  } catch {
+    panelShortcuts = resolvePanelShortcuts(undefined);
+  }
+  renderPanelShortcuts();
+  renderKeyHints();
+}
+
+async function savePanelShortcuts() {
+  try {
+    await chrome.storage.sync.set({ panelShortcuts });
+  } catch {
+    /* keep for this session */
+  }
+  renderPanelShortcuts();
+  renderKeyHints();
+}
+
+async function resetPanelShortcuts() {
+  cancelRecording();
+  panelShortcuts = resolvePanelShortcuts(undefined);
+  await savePanelShortcuts();
+}
+
+/** Render key caps into a container. */
+function renderCaps(container: HTMLElement, caps: string[], unsetLabel = 'Not set') {
+  container.textContent = '';
+  if (!caps.length) {
+    const k = document.createElement('span');
+    k.className = 'kbd unset';
+    k.textContent = unsetLabel;
+    container.appendChild(k);
+    return;
+  }
+  for (const cap of caps) {
+    const k = document.createElement('kbd');
+    k.className = 'kbd';
+    k.textContent = cap;
+    container.appendChild(k);
+  }
+}
+
+/** The browser-level commands, live from Chrome. */
+async function renderBrowserShortcuts() {
+  let commands: chrome.commands.Command[] = [];
+  try {
+    commands = await chrome.commands.getAll();
+  } catch {
+    commands = [];
+  }
+  browserShortcutsEl.textContent = '';
+  const shortcutsPage = browserShortcutsUrl();
+  for (const cmd of commands) {
+    if (!cmd.name || cmd.name === '_execute_action') continue;
+    const row = document.createElement('div');
+    row.className = 'shortcut-row';
+    row.setAttribute('role', 'listitem');
+    const name = document.createElement('div');
+    name.className = 'shortcut-name';
+    const title = document.createElement('span');
+    title.textContent = cmd.description || cmd.name;
+    const desc = document.createElement('span');
+    desc.className = 'shortcut-desc';
+    desc.textContent = 'Browser shortcut';
+    name.appendChild(title);
+    name.appendChild(desc);
+    const keys = document.createElement('span');
+    keys.className = 'keys';
+    const caps = browserShortcutToKeyCaps(cmd.shortcut);
+    renderCaps(keys, caps, 'Not set');
+    if (!caps.length) desc.textContent = 'Not set. Another extension may use the default.';
+    const change = document.createElement('button');
+    change.type = 'button';
+    change.className = 'link-btn';
+    change.textContent = caps.length ? 'Change in Chrome' : 'Set in Chrome';
+    change.addEventListener('click', () => {
+      void chrome.tabs.create({ url: shortcutsPage }).catch(() => {
+        setStatus(searchStatus, `Open ${shortcutsPage} in a new tab to change browser shortcuts.`, 'info');
+      });
+    });
+    row.appendChild(name);
+    row.appendChild(keys);
+    row.appendChild(change);
+    browserShortcutsEl.appendChild(row);
+  }
+}
+
+/** The shortcuts page for this browser. */
+function browserShortcutsUrl(): string {
+  const brands = (navigator as { userAgentData?: { brands?: Array<{ brand: string }> } }).userAgentData?.brands ?? [];
+  const names = brands.map((b) => b.brand.toLowerCase()).join(' ');
+  if (names.includes('edge')) return 'edge://extensions/shortcuts';
+  if ((navigator as { brave?: unknown }).brave || names.includes('brave')) return 'brave://extensions/shortcuts';
+  return 'chrome://extensions/shortcuts';
+}
+
+/** The panel shortcuts, with a recorder per row. */
+function renderPanelShortcuts() {
+  panelShortcutsEl.textContent = '';
+  for (const action of PANEL_ACTIONS) {
+    const row = document.createElement('div');
+    row.className = 'shortcut-row';
+    row.setAttribute('role', 'listitem');
+    row.dataset.action = action;
+
+    const name = document.createElement('div');
+    name.className = 'shortcut-name';
+    name.textContent = PANEL_ACTION_LABELS[action];
+
+    const keysBtn = document.createElement('button');
+    keysBtn.type = 'button';
+    keysBtn.className = 'keys-btn';
+    keysBtn.setAttribute('aria-label', `Change shortcut for: ${PANEL_ACTION_LABELS[action]}`);
+    const combo = parseCombo(panelShortcuts[action]);
+    renderCaps(keysBtn, combo ? comboToKeyCaps(combo, platform) : [], 'Not set');
+    keysBtn.addEventListener('click', () => startRecording(action, keysBtn));
+
+    row.appendChild(name);
+    row.appendChild(keysBtn);
+
+    if (panelShortcuts[action] !== DEFAULT_PANEL_SHORTCUTS[action]) {
+      const reset = document.createElement('button');
+      reset.type = 'button';
+      reset.className = 'link-btn quiet';
+      reset.textContent = 'Reset';
+      reset.addEventListener('click', () => {
+        panelShortcuts[action] = DEFAULT_PANEL_SHORTCUTS[action];
+        void savePanelShortcuts();
+      });
+      row.appendChild(reset);
+    }
+    panelShortcutsEl.appendChild(row);
+  }
+}
+
+/** Show the current bindings on the Install button and preview tabs. */
+function renderKeyHints() {
+  for (const el of app.querySelectorAll<HTMLElement>('[data-shortcut]')) {
+    const action = el.dataset.shortcut as PanelAction;
+    const combo = parseCombo(panelShortcuts[action]);
+    el.textContent = combo ? comboToKeyCaps(combo, platform).join(platform === 'mac' ? '' : '+') : '';
+  }
+}
+
+let recordingBtn: HTMLButtonElement | null = null;
+
+function startRecording(action: PanelAction, btn: HTMLButtonElement) {
+  cancelRecording();
+  recordingAction = action;
+  recordingBtn = btn;
+  btn.classList.add('is-recording');
+  renderCaps(btn, [], 'Press keys…');
+  clearShortcutError(btn);
+}
+
+function cancelRecording() {
+  if (!recordingAction) return;
+  recordingAction = null;
+  recordingBtn = null;
+  renderPanelShortcuts();
+}
+
+function showShortcutError(btn: HTMLElement, reason: string) {
+  const row = btn.closest('.shortcut-row');
+  if (!row) return;
+  clearShortcutError(btn);
+  row.classList.add('has-error');
+  const note = document.createElement('div');
+  note.className = 'shortcut-error';
+  note.textContent = reason;
+  row.appendChild(note);
+}
+function clearShortcutError(btn: HTMLElement) {
+  const row = btn.closest('.shortcut-row');
+  row?.classList.remove('has-error');
+  row?.querySelector('.shortcut-error')?.remove();
+}
+
+/** Bind the single keydown handler to a document (re-bound when floating). */
+function bindKeys(doc: Document) {
+  keyDocument.removeEventListener('keydown', onKeyDown, true);
+  keyDocument = doc;
+  doc.addEventListener('keydown', onKeyDown, true);
+}
+
+function isEditable(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el || typeof el.closest !== 'function') return false;
+  return Boolean(el.closest('input, textarea, select, [contenteditable="true"]'));
+}
+
+function onKeyDown(e: KeyboardEvent) {
+  if (e.isComposing || e.keyCode === 229) return;
+  const pressed = comboFromKeys(e, platform);
+
+  // Recorder: capture the next real key.
+  if (recordingAction && recordingBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!pressed) return; // still holding modifiers
+    const action = recordingAction;
+    const btn = recordingBtn;
+    if (pressed.key === 'Escape' && !pressed.mod && !pressed.alt && !pressed.shift) {
+      cancelRecording();
+      return;
+    }
+    if (pressed.key === 'Backspace' && !pressed.mod && !pressed.alt && !pressed.shift) {
+      panelShortcuts[action] = null;
+      recordingAction = null;
+      recordingBtn = null;
+      void savePanelShortcuts();
+      return;
+    }
+    const text = serializeCombo(pressed);
+    const check = validateCombo(text, action, panelShortcuts);
+    if (!check.ok) {
+      showShortcutError(btn, check.reason ?? 'That shortcut cannot be used.');
+      renderCaps(btn, [], 'Press keys…');
+      return;
+    }
+    panelShortcuts[action] = text;
+    recordingAction = null;
+    recordingBtn = null;
+    void savePanelShortcuts();
+    return;
+  }
+
+  if (!pressed) return;
+  const action = actionForCombo(panelShortcuts, pressed);
+  if (!action) return;
+  if (comboIsBareKey(pressed) && isEditable(e.target)) return;
+
+  const handled = runAction(action);
+  if (handled) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+}
+
+/** Run a panel action. Returns false when nothing sensible could happen. */
+function runAction(action: PanelAction): boolean {
+  switch (action) {
+    case 'focusSearch':
+      searchInput.focus();
+      searchInput.select();
+      return true;
+    case 'install':
+      if (installBtn.disabled || partCard.classList.contains('hidden')) return false;
+      void onInstall();
+      return true;
+    case 'previewSymbol':
+    case 'previewFootprint':
+    case 'preview3d':
+      if (partCard.classList.contains('hidden')) return false;
+      preview?.activate(action === 'previewSymbol' ? 'symbol' : action === 'previewFootprint' ? 'footprint' : '3d');
+      return true;
+    case 'toggleSettings':
+      toggleSettings();
+      return true;
+    case 'dismiss':
+      return dismiss();
+  }
+}
+
+/** Escape: close what's on top, in order of how transient it is. */
+function dismiss(): boolean {
+  if (!detectedOffer.classList.contains('hidden')) {
+    hideOffer();
+    return true;
+  }
+  if (!settingsPanel.classList.contains('hidden')) {
+    toggleSettings(false);
+    return true;
+  }
+  if (searchInFlight) {
+    searchSeq++;
+    endSearch();
+    setStatus(searchStatus, 'Search cancelled.', 'info');
+    return true;
+  }
   if (runningInOverlay) {
-    // Guard against a double-click spawning a second folder picker. (The SW also
-    // dedups setup windows; this gives immediate feedback + avoids a stray send.)
+    try {
+      window.parent.postMessage({ type: 'kicad-overlay-close' }, '*');
+    } catch {
+      /* not framed */
+    }
+    return true;
+  }
+  if (searchInput.value) {
+    searchInput.value = '';
+    searchInput.focus();
+    return true;
+  }
+  if (runningInWindow && !runningInHelper) {
+    window.close();
+    return true;
+  }
+  return false;
+}
+
+// --- Library folder ------------------------------------------------------------------
+
+/** Look at the saved handle without prompting; pick up a live grant if there is one. */
+async function refreshFolderState() {
+  try {
+    const { handle, permission } = await peekSavedFolder();
+    folderPermission = permission;
+    savedFolderName = handle?.name ?? '';
+    libraryFolder = permission === 'granted' ? handle : null;
+  } catch {
+    folderPermission = 'none';
+    libraryFolder = null;
+  }
+}
+
+async function onLibraryAction() {
+  if (runningInOverlay) {
     if (pickFolderInFlight) return;
     pickFolderInFlight = true;
     libPill.disabled = true;
+    setStatus(searchStatus, 'A small window is opening so you can grant your library folder…', 'info');
     try {
-      await chrome.runtime.sendMessage({ type: 'OVERLAY_PICK_FOLDER' });
-      setStatus(searchStatus, 'Opening a window to grant your library folder…', 'loading');
-    } catch {
-      // Couldn't even reach the SW — re-enable so the user can retry.
+      const resp = await chrome.runtime.sendMessage({ type: 'OVERLAY_PICK_FOLDER' });
+      if (!resp?.ok) throw new Error(resp?.error || 'Could not open the window.');
+    } catch (err) {
       pickFolderInFlight = false;
       libPill.disabled = false;
-      setStatus(searchStatus, 'Could not open the folder-grant window.', 'error');
+      setStatus(searchStatus, err instanceof Error ? err.message : 'Could not open the folder window.', 'error');
     }
     return;
   }
 
   try {
-    const handle = await pickLibraryFolder();
+    let handle: FileSystemDirectoryHandle | null = null;
+    // A lapsed grant only needs a click to re-grant (no folder browsing).
+    if (folderPermission === 'prompt') {
+      try {
+        handle = await getSavedFolder();
+      } catch {
+        handle = null;
+      }
+    }
+    if (!handle) handle = await pickLibraryFolder();
     libraryFolder = handle;
+    folderPermission = 'granted';
+    savedFolderName = handle.name;
+    rearmInstallButton();
     refreshReadiness();
-    // Record the folder name for the overlay (which can't hold the FS handle), so
-    // its Library pill reflects readiness no matter where setup happened.
     try {
       await chrome.storage.local.set({ [OVERLAY_LIB_KEY]: handle.name });
     } catch {
-      /* storage unavailable — overlay just won't auto-reflect the new folder */
+      /* overlay just won't auto-reflect the folder */
     }
-    // In a helper window (setup / install re-confirm), finish the delegated job.
-    if (runningInSetup || autoInstallLcsc) {
+    if (runningInHelper) {
       const closed = afterGrantInHelper(handle);
-      // Install helper: the user re-confirmed the lapsed permission mid-install —
-      // now that the folder's valid, install and finish (notify SW + auto-close)
-      // on success OR failure so the overlay never stays stuck.
       if (!closed && autoInstallLcsc && current) {
         await onInstall();
-        void finishHelper(installBtn.classList.contains('is-done') ? 'installed' : 'failed');
+        await finishInstallHelper();
       }
     }
   } catch (err) {
-    // AbortError = user cancelled the picker — stay quiet.
     if (err instanceof DOMException && err.name === 'AbortError') return;
-    setStatus(
-      searchStatus,
-      err instanceof Error ? err.message : 'Could not open folder.',
-      'error',
-    );
+    setStatus(searchStatus, err instanceof Error ? err.message : 'Could not open the folder.', 'error');
   }
 }
 
-// --- Relay URL ---------------------------------------------------------------
+// --- Relay URL ------------------------------------------------------------------------
+
 /**
- * Persist the edited relay URL to chrome.storage.local and refresh UI state, on
- * every keystroke. We DON'T rewrite the `source` input the user is typing in —
- * doing so on each input event stripped a trailing space mid-type and jumped the
- * caret to the end. Normalization (trim) of the *displayed* value happens only on
- * blur (see `normalizeRelayInput`). The OTHER (mirror) input is safe to overwrite
- * since the user isn't editing it.
+ * Persist the relay URL as the user types. The field being typed in is left
+ * alone (rewriting it jumps the caret); the mirror field and storage get the
+ * normalized value. An invalid value shows an inline note and is not saved.
  */
-async function onRelayUrlChange(value: string, source: HTMLInputElement) {
-  relayUrl = value.trim();
-  // Mirror the trimmed value into the OTHER input so settings and setup agree,
-  // but leave the input being typed in untouched (no caret jump / space-strip).
+async function onRelayUrlChange(source: HTMLInputElement) {
+  const { url, error } = normalizeRelayUrl(source.value);
+  const note = source === relayUrlInput ? relayNote : relayNoteSetup;
+  source.classList.toggle('is-invalid', Boolean(error));
+  if (error) {
+    setNote(note, error, 'error');
+    return;
+  }
+  setNote(note, '', '');
+  relayUrl = url;
   const mirror = source === relayUrlInput ? relayUrlInputSetup : relayUrlInput;
   if (mirror.value !== relayUrl) mirror.value = relayUrl;
   refreshReadiness();
   try {
     await chrome.storage.local.set({ relayUrl });
   } catch {
-    /* storage unavailable — keep the in-memory value so the session still works */
+    /* keep in memory */
   }
 }
 
-/** On blur, normalize an input's displayed value to the trimmed relay URL. */
 function normalizeRelayInput(input: HTMLInputElement) {
-  if (input.value !== relayUrl) input.value = relayUrl;
+  const { url, error } = normalizeRelayUrl(input.value);
+  if (!error && input.value !== url) input.value = url;
 }
 
-/** Whether a relay URL has been configured (search/convert is possible). */
+/**
+ * GET the relay root and report in one line what to do next. Tests what is in
+ * the field right now (not the last saved URL); a working address is saved.
+ */
+async function testRelay(note: HTMLElement, input: HTMLInputElement) {
+  const { url, error } = normalizeRelayUrl(input.value);
+  if (error || !url) {
+    setNote(note, error ?? 'Paste your relay URL first.', 'error');
+    return;
+  }
+  if (url !== relayUrl) await onRelayUrlChange(input);
+  setNote(note, 'Checking…', 'checking');
+  try {
+    const resp = await fetch(`${url}/`, { signal: AbortSignal.timeout(8000), cache: 'no-store' });
+    const body = await resp.text();
+    const health = interpretRelayHealth(resp.status, body);
+    if (health.ok) setNote(note, 'Relay reachable. You can search now.', 'ok');
+    else setNote(note, health.detail, 'error');
+  } catch (err) {
+    const timedOut = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
+    setNote(note, timedOut ? 'No answer in 8 seconds. Check the address and your connection.' : 'Could not reach that address. Check it and your connection.', 'error');
+  }
+}
+
+function setNote(el: HTMLElement, text: string, kind: '' | 'ok' | 'error' | 'checking') {
+  el.textContent = text;
+  el.className = `field-note${kind ? ` is-${kind}` : ''}`;
+}
+
 function hasRelay(): boolean {
   return relayUrl.length > 0;
 }
-/**
- * Whether a library folder is available for install. In the overlay iframe we
- * can't hold the FS handle, so readiness is the recorded folder name from
- * chrome.storage; everywhere else it's the live directory handle.
- */
 function hasFolder(): boolean {
   return runningInOverlay ? overlayLibraryName.length > 0 : libraryFolder !== null;
 }
-/** The granted library folder's display name (handle name, or the overlay mirror). */
 function folderName(): string {
-  return runningInOverlay ? overlayLibraryName : (libraryFolder?.name ?? '');
+  return runningInOverlay ? overlayLibraryName : (libraryFolder?.name ?? savedFolderName);
 }
-/** Both prerequisites met → the main flow is usable. */
 function isReady(): boolean {
   return hasRelay() && hasFolder();
 }
 
-/** Open the setup view and focus the relay field within it. */
 function openSetupFocusRelay() {
-  setupView.classList.remove('hidden');
+  setupPinned = true;
+  refreshReadiness();
   relayUrlInputSetup.focus();
 }
 
-/**
- * Single source of truth for "what's set up". Updates the two pills, shows/hides
- * the Setup view (only when something's missing AND no result is on screen), and
- * re-evaluates the Search + Install enabled states.
- */
+/** Single source of truth for "what's set up". */
 function refreshReadiness() {
-  // --- Library pill ---
+  // Library pill.
+  libPill.classList.remove('is-ready', 'is-missing');
   if (hasFolder()) {
-    const name = folderName();
     libPill.classList.add('is-ready');
-    libPill.classList.remove('is-missing');
-    setText(libPillValue, name);
-    libPill.title = `Library folder: ${name} — click to change`;
+    setText(libPillValue, folderName());
+    libPill.title = `Library folder: ${folderName()}. Click to change.`;
+  } else if (!runningInOverlay && folderPermission === 'prompt') {
+    libPill.classList.add('is-missing');
+    setText(libPillValue, 'Reconnect folder');
+    libPill.title = `Chrome needs one click to re-allow “${savedFolderName}”.`;
   } else {
-    libPill.classList.remove('is-ready');
     libPill.classList.add('is-missing');
     setText(libPillValue, 'Choose folder');
     libPill.title = 'Choose your KiCad library folder';
   }
 
-  // --- Relay pill ---
+  // Relay pill.
+  relayPill.classList.remove('is-ready', 'is-missing');
   if (hasRelay()) {
     relayPill.classList.add('is-ready');
-    relayPill.classList.remove('is-missing');
     setText(relayPillValue, prettyRelay(relayUrl));
-    relayPill.title = `Relay: ${relayUrl} — click to edit`;
+    relayPill.title = `Relay: ${relayUrl}. Click to edit.`;
   } else {
-    relayPill.classList.remove('is-ready');
     relayPill.classList.add('is-missing');
-    setText(relayPillValue, 'Set relay');
-    relayPill.title = 'Set your relay URL';
+    setText(relayPillValue, 'Add relay URL');
+    relayPill.title = 'Add your relay URL';
   }
 
-  // --- Setup view: only takes over on first run / when something's missing,
-  //     and never while a result card is showing (don't yank it away mid-task).
+  // Setup view: first run, something missing, or pinned while editing. Never
+  // over a result card, and never duplicated under an open Settings panel.
   const cardShowing = !partCard.classList.contains('hidden');
-  const showSetup = !isReady() && !cardShowing;
+  const settingsOpen = !settingsPanel.classList.contains('hidden');
+  const showSetup = setupPinned || (!isReady() && !cardShowing && !settingsOpen);
   setupView.classList.toggle('hidden', !showSetup);
   setupStepLib.classList.toggle('is-done', hasFolder());
   setupStepRelay.classList.toggle('is-done', hasRelay());
+  setupDoneBtn.classList.toggle('hidden', !(setupPinned && isReady()));
 
-  // --- Search affordance ---
-  // Search/convert/preview only need the relay; the folder is required at INSTALL
-  // time only. So disable Search solely for a missing relay — a relay-set user
-  // with no folder can still search + preview, then grant a folder to install.
+  // Search needs only the relay.
   const blocked = !hasRelay();
-  searchBtn.disabled = blocked;
+  searchBtn.disabled = blocked || searchInFlight;
   searchField.classList.toggle('is-disabled', blocked);
   if (blocked) {
-    const what = 'Set your relay URL to search.';
-    setText(searchHint, what);
-    searchHint.classList.remove('hidden');
-    searchBtn.title = what;
+    setText(searchHint, 'Add your relay URL to start searching.');
+    show(searchHint);
   } else if (!hasFolder()) {
-    // Relay's set but no folder yet: searching/previewing works; nudge that a
-    // folder is needed before installing (Install stays gated below).
-    const what = 'Search + preview work now — choose a library folder to install.';
-    setText(searchHint, what);
-    searchHint.classList.remove('hidden');
-    searchBtn.title = '';
+    setText(searchHint, folderPermission === 'prompt' && !runningInOverlay
+      ? 'Search and preview work now. Click “Reconnect folder” before installing.'
+      : 'Search and preview work now. Choose a library folder to install.');
+    show(searchHint);
   } else {
-    searchHint.classList.add('hidden');
-    searchBtn.title = '';
+    hide(searchHint);
   }
 
   refreshInstallEnabled();
 }
 
-/** Shorten a relay origin for the pill (drop scheme; keep host + a short tail). */
-function prettyRelay(url: string): string {
-  try {
-    const u = new URL(url);
-    const tail = u.pathname.replace(/\/+$/, '');
-    return tail && tail !== '/' ? `${u.host}${tail}` : u.host;
-  } catch {
-    return url.replace(/^https?:\/\//, '');
-  }
-}
-
-// --- Search / convert --------------------------------------------------------
+// --- Search / convert -------------------------------------------------------------------
 const LCSC_RE = /^C\d+$/i;
 
-async function runSearch(query: string) {
+function beginSearch(): number {
+  searchInFlight = true;
+  searchBtn.disabled = true;
+  searchBtn.classList.add('is-busy');
+  searchBtn.textContent = 'Searching…';
+  return ++searchSeq;
+}
+function endSearch() {
+  searchInFlight = false;
+  searchBtn.classList.remove('is-busy');
+  searchBtn.textContent = 'Search';
+  searchBtn.disabled = !hasRelay();
+}
+function stale(seq: number): boolean {
+  return seq !== searchSeq;
+}
+
+async function runSearch(rawQuery: string) {
+  const query = rawQuery.trim();
+  hideOffer();
   hide(candidateSection);
   hide(partCard);
   hide(secondarySources);
-  // Tear down the previous part's previews (stops any 3D scene + frees WebGL).
   preview?.reset();
   current = null;
+  currentMatch = null;
   candidates = [];
+  setupPinned = false;
 
-  // Search / convert / preview only need the relay (the folder is required only
-  // at INSTALL time — onInstall guards on it). So gate Search on the relay alone:
-  // a relay-set / no-folder user can search → preview symbol/footprint/3D → then
-  // grant a folder → install (the v1 flow).
   if (!hasRelay()) {
     refreshReadiness();
-    setStatus(searchStatus, 'Set your relay URL first.', 'error');
+    setStatus(searchStatus, 'Add your relay URL first.', 'error');
     return;
   }
-
   if (!query) {
-    setStatus(searchStatus, 'Enter an LCSC# (e.g. C3235557) or an MPN.', 'error');
+    setStatus(searchStatus, 'Enter an LCSC number (like C3235557) or a part number.', 'error');
     return;
   }
 
-  // Direct LCSC id → convert immediately.
-  if (LCSC_RE.test(query)) {
-    await convertAndShow(query.toUpperCase(), null);
-    return;
-  }
-
-  // Otherwise treat as MPN: resolve to LCSC candidates via JLCPCB.
-  setStatus(searchStatus, `Looking up "${query}" on JLCPCB…`, 'loading');
-  let matches: JlcMatch[] = [];
-  let relaxed = false;
-  let matchedQuery = '';
-  // Precise network/parse outcome from the service worker so a failed search
-  // shows the REAL cause instead of a generic "no match".
-  let diagnostic = 'no response';
+  const seq = beginSearch();
   try {
-    const resp = await chrome.runtime.sendMessage({ type: 'RESOLVE_MPN', mpn: query });
-    if (resp?.ok) {
-      matches = resp.matches as JlcMatch[];
-      relaxed = Boolean(resp.relaxed);
-      matchedQuery = (resp.matchedQuery as string) || '';
-      diagnostic = (resp.diagnostic as string) || 'no diagnostic';
-    } else if (resp?.error) {
-      diagnostic = `worker error: ${resp.error}`;
+    if (LCSC_RE.test(query)) {
+      await convertAndShow(query.toUpperCase(), null, undefined, seq);
+      return;
     }
-  } catch (err) {
-    diagnostic = `message failed: ${err instanceof Error ? err.message : String(err)}`;
+
+    setStatus(searchStatus, `Looking up ${query} on JLCPCB…`, 'loading');
+    let matches: JlcMatch[] = [];
+    let relaxed = false;
+    let matchedQuery = '';
+    let diagnostic = 'no response';
+    try {
+      const resp = await chrome.runtime.sendMessage({ type: 'RESOLVE_MPN', mpn: query });
+      if (resp?.ok) {
+        matches = resp.matches as JlcMatch[];
+        relaxed = Boolean(resp.relaxed);
+        matchedQuery = (resp.matchedQuery as string) || '';
+        diagnostic = (resp.diagnostic as string) || 'no diagnostic';
+      } else if (resp?.error) {
+        diagnostic = `worker error: ${resp.error}`;
+      }
+    } catch (err) {
+      diagnostic = `message failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    if (stale(seq)) return;
+
+    if (matches.length === 0) {
+      const friendly = explainSearchFailure(diagnostic, query);
+      setStatus(searchStatus, friendly.text, 'error', friendly.detail, friendly.action);
+      showSecondarySources(query);
+      return;
+    }
+
+    const note = relaxed ? `No exact match for ${query}. Showing the closest results for ${matchedQuery}.` : undefined;
+    candidates = matches;
+    if (matches.length > 1) renderCandidates(matches, matches[0].lcscId);
+    await convertAndShow(matches[0].lcscId, matches[0], note, seq);
+  } finally {
+    if (!stale(seq)) endSearch();
   }
-
-  // Only when even the relaxed fallbacks came back empty do we surface the real
-  // failure and suggest entering the exact LCSC#.
-  if (matches.length === 0) {
-    setStatus(
-      searchStatus,
-      `Search failed — JLCPCB ${diagnostic}. Try the exact LCSC# (C…).`,
-      'error',
-    );
-    showSecondarySources(query);
-    return;
-  }
-
-  // The input wasn't an exact catalog hit — these are the closest matches.
-  const note = relaxed ? `No exact match — closest results for ${matchedQuery}` : undefined;
-
-  candidates = matches;
-  if (matches.length === 1) {
-    await convertAndShow(matches[0].lcscId, matches[0], note);
-    return;
-  }
-
-  // Multiple matches — let the user pick (auto-convert the top/most-in-stock).
-  renderCandidates(matches);
-  await convertAndShow(matches[0].lcscId, matches[0], note);
 }
 
-function renderCandidates(matches: JlcMatch[]) {
-  candidateSelect.textContent = '';
-  for (const m of matches) {
-    const opt = document.createElement('option');
-    opt.value = m.lcscId;
-    const stock = m.stock ? `${m.stock.toLocaleString()} in stock` : 'no stock';
-    opt.textContent = `${m.mpn} · ${m.package || '—'} · ${m.lcscId} · ${stock}`;
-    candidateSelect.appendChild(opt);
+/** Turn a wire-level diagnostic into what to do next. */
+function explainSearchFailure(diagnostic: string, query: string): { text: string; detail: string; action?: { label: string; run: () => void } } {
+  const testAction = { label: 'Test relay', run: () => { toggleSettings(true); void testRelay(relayNote, relayUrlInput); } };
+  if (/^worker error: relay URL not set/.test(diagnostic)) {
+    return { text: 'Add your relay URL first.', detail: '' };
   }
-  candidateSelect.selectedIndex = 0;
+  if (/fetch threw|message failed|timed out/.test(diagnostic)) {
+    return { text: 'Could not reach your relay. Check the Relay URL in Settings.', detail: diagnostic, action: testAction };
+  }
+  if (/non-JSON/.test(diagnostic)) {
+    return { text: 'Your relay answered with a web page instead of data. The URL is probably missing /api.', detail: diagnostic, action: testAction };
+  }
+  const m = diagnostic.match(/^http (\d+)(?:, (\d+) results)?/);
+  if (m && m[2] === undefined) {
+    const status = Number(m[1]);
+    if (status === 403 || status === 429) {
+      return { text: 'JLCPCB refused the request for now. Wait a minute, or paste the exact LCSC number (C…).', detail: diagnostic };
+    }
+    return { text: `Your relay returned HTTP ${status}. Check its logs or redeploy it.`, detail: diagnostic, action: testAction };
+  }
+  return { text: `No JLCPCB part matches “${query}”. Try the exact LCSC number (C…) or one of the sources below.`, detail: '' };
+}
+
+function renderCandidates(matches: JlcMatch[], selectedId: string) {
+  candidateList.textContent = '';
+  for (const m of matches) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'candidate';
+    row.setAttribute('role', 'option');
+    row.setAttribute('aria-selected', String(m.lcscId === selectedId));
+    row.dataset.lcsc = m.lcscId;
+
+    const mpn = document.createElement('span');
+    mpn.className = 'candidate-mpn';
+    mpn.textContent = m.mpn;
+    if (m.mpn.toLowerCase() === searchInput.value.trim().toLowerCase()) {
+      const exact = document.createElement('span');
+      exact.className = 'candidate-exact';
+      exact.textContent = 'exact';
+      mpn.appendChild(exact);
+    }
+    const meta = document.createElement('span');
+    meta.className = 'candidate-meta';
+    meta.textContent = [m.package || '—', m.lcscId].join(' · ');
+    const stock = document.createElement('span');
+    stock.className = `candidate-stock${m.stock <= 0 ? ' is-none' : m.stock < 100 ? ' is-low' : ''}`;
+    stock.textContent = m.stock > 0 ? `${m.stock.toLocaleString()} in stock${m.price !== null ? ` · ${formatPrice(m.price)}` : ''}` : 'No stock';
+
+    row.appendChild(mpn);
+    row.appendChild(stock);
+    row.appendChild(meta);
+    row.addEventListener('click', () => {
+      for (const el of candidateList.querySelectorAll('.candidate')) el.setAttribute('aria-selected', String(el === row));
+      const seq = beginSearch();
+      void convertAndShow(m.lcscId, m, undefined, seq).finally(() => {
+        if (!stale(seq)) endSearch();
+      });
+    });
+    candidateList.appendChild(row);
+  }
   show(candidateSection);
 }
 
-async function convertAndShow(lcscId: string, match: JlcMatch | null, note?: string) {
-  setStatus(searchStatus, `Fetching + converting ${lcscId}…`, 'loading');
+async function convertAndShow(lcscId: string, match: JlcMatch | null, note: string | undefined, seq: number) {
+  setStatus(searchStatus, `Fetching and converting ${lcscId}…`, 'loading');
   hide(partCard);
+  preview?.reset();
 
   let result: ConvertResult;
   try {
@@ -916,34 +1403,53 @@ async function convertAndShow(lcscId: string, match: JlcMatch | null, note?: str
     if (!resp?.ok) throw new Error(resp?.error || 'Conversion failed.');
     result = resp.result as ConvertResult;
   } catch (err) {
-    setStatus(searchStatus, err instanceof Error ? err.message : 'Conversion failed.', 'error');
+    if (stale(seq)) return;
+    const msg = err instanceof Error ? err.message : 'Conversion failed.';
+    setStatus(searchStatus, msg === 'relay URL not set' ? 'Add your relay URL first.' : msg, 'error');
+    showSecondarySources(match?.mpn || lcscId);
     return;
   }
+  if (stale(seq)) return;
 
   current = result;
-  // Keep the "closest results" hint visible when the match came from a relaxed
-  // query; otherwise clear the transient status.
-  if (note) {
-    setStatus(searchStatus, note, 'loading');
-  } else {
-    hide(searchStatus);
-  }
+  currentMatch = match;
+  if (note) setStatus(searchStatus, note, 'info');
+  else setStatus(searchStatus, `Loaded ${result.meta.mpn || lcscId}.`, 'success');
   showCard(result, match);
   showSecondarySources(result.meta.mpn || lcscId);
+
+  // A direct C-number search skips JLCPCB; fetch stock/price in the background.
+  if (!match) void fillStockBadge(lcscId, seq);
 }
 
-// --- Card --------------------------------------------------------------------
+async function fillStockBadge(lcscId: string, seq: number) {
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: 'RESOLVE_MPN', mpn: lcscId });
+    if (stale(seq) || !resp?.ok) return;
+    const hit = (resp.matches as JlcMatch[]).find((m) => m.lcscId === lcscId);
+    if (hit) {
+      currentMatch = hit;
+      renderStockBadge(hit);
+      if (!current?.meta.package && hit.package) fieldPackage.value = hit.package;
+    }
+  } catch {
+    /* badge stays hidden */
+  }
+}
+
+// --- Card ---------------------------------------------------------------------------------
+
 function showCard(result: ConvertResult, match: JlcMatch | null) {
   const meta = result.meta;
-  setText(cardLcsc, meta.lcsc || match?.lcscId || 'C—');
+  const lcsc = meta.lcsc || match?.lcscId || '';
+  setText(cardLcsc, lcsc || 'C—');
+  if (lcsc) cardLcsc.href = `https://www.lcsc.com/product-detail/${encodeURIComponent(lcsc)}.html`;
+  else cardLcsc.removeAttribute('href');
   setText(cardMpn, meta.mpn || '(unknown MPN)');
 
-  // Subtitle: manufacturer · package, from metadata (fall back to the JLC match).
   const manufacturer = meta.manufacturer || '';
   const pkg = meta.package || match?.package || '';
   renderCardSub(manufacturer, pkg);
-
-  // Stock / price badge from the JLCPCB match (only present on an MPN search).
   renderStockBadge(match);
 
   fieldMpn.value = meta.mpn || '';
@@ -951,7 +1457,6 @@ function showCard(result: ConvertResult, match: JlcMatch | null) {
   fieldPackage.value = pkg;
   fieldDatasheet.value = meta.datasheet || '';
 
-  // Prompt-on-uncertain: flag empty datasheet / MPN for confirmation.
   toggleFlag(flagMpn, fieldMpn, !meta.mpn);
   toggleFlag(flagDatasheet, fieldDatasheet, !meta.datasheet);
   fieldMpn.oninput = () => toggleFlag(flagMpn, fieldMpn, !fieldMpn.value.trim());
@@ -961,34 +1466,29 @@ function showCard(result: ConvertResult, match: JlcMatch | null) {
   };
   updateDatasheetLink();
 
-  // Auto-sort the bucket from the JLCPCB category (best) or the package text.
   const category = match?.category || meta.package || '';
   bucketSelect.value = categoryToBucket(category);
+  updateDestPath();
 
-  // 3D model status indicator.
+  setAssetState(symbolAvail, /\(pin\s/.test(result.symbol) ? 'Ready' : 'No pins', /\(pin\s/.test(result.symbol));
+  setAssetState(footprintAvail, /\(pad\s/.test(result.footprint) ? 'Ready' : 'No pads', /\(pad\s/.test(result.footprint));
   setAssetState(model3dAvail, result.model3dUrl ? 'STEP' : 'None', !!result.model3dUrl);
 
-  // Point the preview block at this part. It renders the Symbol tab now and the
-  // others lazily on first open (3D only imports three.js when its tab opens).
   preview?.setResult(result, relayUrl);
 
-  // Reset the install footer to its initial state.
   hide(installStatus);
   hide(successPanel);
+  hide(closeHelperBtn);
   writtenList.textContent = '';
-  installBtn.textContent = 'Install to KiCad';
-  installBtn.className = 'btn btn-primary';
-  installBtn.disabled = false;
+  setInstallButton('idle');
   show(partCard);
-  refreshInstallEnabled();
+  refreshReadiness();
 }
 
 function renderCardSub(manufacturer: string, pkg: string) {
   cardSub.textContent = '';
-  const parts: string[] = [];
-  if (manufacturer) parts.push(manufacturer);
-  if (pkg) parts.push(pkg);
-  if (parts.length === 0) {
+  const parts = [manufacturer, pkg].filter(Boolean);
+  if (!parts.length) {
     hide(cardSub);
     return;
   }
@@ -1001,15 +1501,14 @@ function renderCardSub(manufacturer: string, pkg: string) {
     }
     const span = document.createElement('span');
     span.textContent = text;
-    if (i === 1) span.className = 'mono';
+    if (text === pkg && pkg) span.className = 'mono';
     cardSub.appendChild(span);
   });
   show(cardSub);
 }
 
-/** Render a subtle stock/price badge from the JLCPCB match, when present. */
 function renderStockBadge(match: JlcMatch | null) {
-  if (!match || (match.stock === 0 && match.price === null)) {
+  if (!match) {
     hide(stockBadge);
     return;
   }
@@ -1017,18 +1516,20 @@ function renderStockBadge(match: JlcMatch | null) {
   const tone = stock <= 0 ? 'no-stock' : stock < 100 ? 'low-stock' : 'in-stock';
   stockBadge.className = `stock-badge ${tone}`;
   stockBadge.textContent = '';
-
   const stockText = document.createElement('span');
-  stockText.textContent = stock > 0 ? `${stock.toLocaleString()} in stock` : 'No stock';
+  stockText.textContent = stock > 0 ? `${stock.toLocaleString()} in stock` : match.price === null ? 'Stock unknown' : 'No stock';
   stockBadge.appendChild(stockText);
-
   if (match.price !== null) {
     const price = document.createElement('span');
     price.className = 'badge-price';
-    price.textContent = `$${match.price.toFixed(match.price < 1 ? 4 : 2)}`;
+    price.textContent = formatPrice(match.price);
     stockBadge.appendChild(price);
   }
   show(stockBadge);
+}
+
+function formatPrice(price: number): string {
+  return `$${price.toFixed(price < 1 ? 4 : 2)}`;
 }
 
 function updateDatasheetLink() {
@@ -1051,61 +1552,74 @@ function safeHttpUrl(value: string): string | null {
   }
 }
 
-// --- Install -----------------------------------------------------------------
-async function onInstall() {
-  if (!current || !hasRelay()) return;
+function updateDestPath() {
+  const lib = bucketLabel(bucketSelect.value);
+  setText(destPath, `symbols/${lib}.kicad_sym · footprints/${lib}.pretty/`);
+}
 
-  // Cancel any pending highlight-to-search debounce so a search scheduled just
-  // before this click can't fire mid-install and null `current` out from under us.
+// --- Install --------------------------------------------------------------------------------
+
+type InstallButtonState = 'idle' | 'busy' | 'done' | 'error' | 'partial';
+function setInstallButton(state: InstallButtonState, label?: string) {
+  installBtn.className = `btn btn-primary${state === 'idle' ? '' : ` is-${state}`}`;
+  setText(installBtnText, label ?? (state === 'busy' ? 'Installing…' : 'Install to KiCad'));
+  installBtn.disabled = state === 'busy' || state === 'done';
+  if (state === 'idle' || state === 'error' || state === 'partial') refreshInstallEnabled();
+}
+
+/** After a change that makes re-installing meaningful (bucket / folder), leave the done state. */
+function rearmInstallButton() {
+  if (installBtn.classList.contains('is-done') || installBtn.classList.contains('is-partial')) {
+    setInstallButton('idle');
+    hide(successPanel);
+    hide(installStatus);
+  }
+}
+
+async function onInstall() {
+  if (!current || !hasRelay() || installInFlight) return;
   if (detectDebounce) {
     clearTimeout(detectDebounce);
     detectDebounce = null;
   }
-
   const bucket = bucketSelect.value as LibraryChoice;
 
-  // Overlay iframe: FS writes are blocked here. Delegate to a real window via the
-  // SW (which opens `?win=1&install=<lcscId>&bucket=<bucket>`, auto-writes against
-  // the saved handle, then closes + broadcasts OVERLAY_INSTALLED back to us).
   if (runningInOverlay) {
     const lcscId = current.meta.lcsc;
     if (!lcscId) {
-      failInstall('Missing LCSC id — re-run the search.');
+      failInstall('Missing LCSC id. Run the search again.');
       return;
     }
-    installBtn.disabled = true;
-    installBtn.textContent = 'Installing in a window…';
-    installBtn.className = 'btn btn-primary is-busy';
+    setInstallButton('busy', 'Installing in a separate window…');
     hide(successPanel);
-    setStatus(installStatus, 'A helper window is writing the files…', 'loading');
-    // Stay "in flight" until the helper's terminal broadcast (OVERLAY_INSTALLED /
-    // OVERLAY_INSTALL_FAILED) lands, so a live detection can't null `current` out
-    // from under markOverlayInstalled() while the helper window works.
+    setStatus(installStatus, 'A small window is writing the files. It closes by itself.', 'loading');
     installInFlight = true;
-    try {
-      await chrome.runtime.sendMessage({ type: 'OVERLAY_INSTALL', lcscId, bucket });
-    } catch {
+    clearOverlayWatchdog();
+    overlayInstallWatchdog = setTimeout(() => {
+      if (!installInFlight) return;
       installInFlight = false;
-      failInstall('Could not open the install window.');
+      markOverlayInstallFailed(false, 'No answer from the install window. Try again.');
+    }, OVERLAY_INSTALL_WATCHDOG_MS);
+    try {
+      const resp = await chrome.runtime.sendMessage({ type: 'OVERLAY_INSTALL', lcscId, bucket });
+      if (!resp?.ok) throw new Error(resp?.error || 'Could not open the install window.');
+    } catch (err) {
+      clearOverlayWatchdog();
+      installInFlight = false;
+      failInstall(err instanceof Error ? err.message : 'Could not open the install window.');
     }
     return;
   }
 
-  // Top-level document: write directly via File System Access. A relay URL is
-  // required even here — the 3D-model STEP is fetched through it.
-  if (!libraryFolder) return;
+  if (!libraryFolder) {
+    refreshInstallEnabled();
+    return;
+  }
 
-  installBtn.disabled = true;
-  installBtn.textContent = 'Installing…';
-  installBtn.className = 'btn btn-primary is-busy';
+  setInstallButton('busy');
   hide(installStatus);
   hide(successPanel);
 
-  // Snapshot everything we need from `current` + the editable fields BEFORE the
-  // `await installPart`. A live PART_DETECTED that slips through during the await
-  // would null `current` via runSearch, so reading `current.meta.*` afterwards
-  // (the old success branch did) could throw; the in-flight guard now suppresses
-  // that re-search too, but capturing locals keeps onInstall correct regardless.
   const mpn = fieldMpn.value.trim() || current.meta.mpn;
   const partName = mpn || current.meta.lcsc || 'part';
   const installInput = {
@@ -1133,39 +1647,40 @@ async function onInstall() {
     installInFlight = false;
   }
 
-  if (res.ok) {
-    installBtn.textContent = `Installed ${partName} → ${bucketLabel(bucket)}`;
-    installBtn.className = 'btn btn-primary is-done';
-    installBtn.disabled = true;
+  const lib = bucketLabel(bucket);
+  renderWritten(res.written);
+  successPanel.classList.toggle('is-partial', !res.ok);
+  restartNote.classList.toggle('hidden', !(res.ok && res.libraryCreated));
+  reloadNote.classList.toggle('hidden', !(res.ok && !res.libraryCreated));
 
+  if (res.ok) {
+    setInstallButton('done', `Installed ${truncate(partName, 22)} → ${lib}`);
+    const files = res.written.filter((w) => !w.includes('(deduped)')).length;
     const summary = res.symbolAdded
-      ? `Installed into ${bucketLabel(bucket)}.`
-      : `Symbol already in ${bucketLabel(bucket)} — footprint refreshed.`;
-    setStatus(installStatus, `${summary} 3D model: ${res.modelStatus || 'none'}.`, 'success');
-    renderWritten(res.written);
+      ? `Installed into ${lib}. ${files} file${files === 1 ? '' : 's'} written.`
+      : `${partName} was already in ${lib}. Footprint refreshed.`;
+    const model = res.modelStatus && res.modelStatus !== 'ok' ? ` 3D model ${res.modelStatus}.` : '';
+    setStatus(installStatus, summary + model, 'success');
     show(successPanel);
+    installAnotherBtn.focus();
   } else {
-    failInstall(res.errors.join('; ') || 'Install failed.');
-    renderWritten(res.written);
+    setInstallButton(res.written.length ? 'partial' : 'error', res.written.length ? 'Partly installed. Retry' : 'Install failed. Retry');
+    setStatus(installStatus, res.written.length ? `Some files were not written: ${res.errors.join('; ')}` : res.errors.join('; ') || 'Install failed.', 'error');
     if (res.written.length) show(successPanel);
   }
 }
 
-/** The user-facing library name for a bucket value. */
 function bucketLabel(bucket: string): string {
   return bucket === 'KiCadPartFinder' ? 'KiCadPartFinder' : `DavidLib_${bucket}`;
 }
 
 function failInstall(msg: string) {
-  installBtn.textContent = 'Install failed — retry';
-  installBtn.className = 'btn btn-primary is-error';
-  installBtn.disabled = false;
+  setInstallButton('error', 'Install failed. Retry');
   setStatus(installStatus, msg, 'error');
 }
 
 function renderWritten(paths: string[]) {
   writtenList.textContent = '';
-  if (!paths.length) return;
   for (const p of paths) {
     const li = document.createElement('li');
     li.textContent = p;
@@ -1173,9 +1688,10 @@ function renderWritten(paths: string[]) {
   }
 }
 
-/** Reset back to a clean search-and-install state for the next part. */
 function resetForAnother() {
+  searchSeq++;
   current = null;
+  currentMatch = null;
   candidates = [];
   preview?.reset();
   hide(partCard);
@@ -1184,17 +1700,18 @@ function resetForAnother() {
   hide(successPanel);
   hide(installStatus);
   hide(searchStatus);
+  successPanel.classList.remove('is-partial');
+  setInstallButton('idle');
   searchInput.value = '';
   searchInput.focus();
   refreshReadiness();
 }
 
-// --- Secondary sources -------------------------------------------------------
+// --- Secondary sources ---------------------------------------------------------------------
+
 function showSecondarySources(mpn: string) {
   sourceLinks.textContent = '';
-  for (const link of getSecondarySourceLinks(mpn)) {
-    sourceLinks.appendChild(createSourceLink(link));
-  }
+  for (const link of getSecondarySourceLinks(mpn)) sourceLinks.appendChild(createSourceLink(link));
   show(secondarySources);
 }
 
@@ -1204,7 +1721,6 @@ function createSourceLink(link: { name: string; url: string; description: string
   a.href = link.url;
   a.target = '_blank';
   a.rel = 'noopener';
-
   const info = document.createElement('div');
   info.className = 'source-link-info';
   const nameEl = document.createElement('div');
@@ -1215,28 +1731,26 @@ function createSourceLink(link: { name: string; url: string; description: string
   descEl.textContent = link.description;
   info.appendChild(nameEl);
   info.appendChild(descEl);
-
   const arrow = document.createElement('span');
   arrow.className = 'source-link-arrow';
   arrow.textContent = '→';
-
   a.appendChild(info);
   a.appendChild(arrow);
   return a;
 }
 
-// --- Small helpers -----------------------------------------------------------
+// --- Small helpers ----------------------------------------------------------------------------
+
 function refreshInstallEnabled() {
-  // Don't override the terminal success state's disabled button.
-  if (installBtn.classList.contains('is-done')) return;
-  // Overlay mode gates on the recorded folder (hasFolder()) since the iframe
-  // holds no FS handle; top-level modes gate on the live handle.
+  if (installBtn.classList.contains('is-done') || installBtn.classList.contains('is-busy')) return;
   installBtn.disabled = !(hasFolder() && current && hasRelay());
   installBtn.title = !hasRelay()
-    ? 'Set your relay URL first.'
+    ? 'Add your relay URL first.'
     : hasFolder()
       ? ''
-      : 'Choose a library folder first.';
+      : folderPermission === 'prompt' && !runningInOverlay
+        ? 'Click “Reconnect folder” first.'
+        : 'Choose a library folder first.';
 }
 
 function toggleFlag(flag: HTMLElement, input: HTMLInputElement, missing: boolean) {
@@ -1251,17 +1765,43 @@ function setAssetState(element: HTMLElement, label: string, available: boolean) 
   element.classList.toggle('is-off', !available);
 }
 
-type StatusKind = 'success' | 'error' | 'loading';
-function setStatus(el: HTMLElement, msg: string, kind: StatusKind) {
-  el.textContent = msg;
+type StatusKind = 'success' | 'error' | 'loading' | 'info';
+function setStatus(
+  el: HTMLElement,
+  msg: string,
+  kind: StatusKind,
+  detail = '',
+  action?: { label: string; run: () => void },
+) {
+  el.textContent = '';
   el.className = `status ${kind}`;
-  el.classList.remove('hidden');
+  el.setAttribute('aria-live', kind === 'error' ? 'assertive' : 'polite');
+  const text = document.createElement('span');
+  text.textContent = msg;
+  el.appendChild(text);
+  if (action) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'link-btn status-action';
+    btn.textContent = action.label;
+    btn.addEventListener('click', action.run);
+    el.appendChild(btn);
+  }
+  if (detail) {
+    const d = document.createElement('span');
+    d.className = 'status-detail';
+    d.textContent = detail;
+    el.appendChild(d);
+  }
+}
+
+function truncate(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
 function setText(el: Element | null, text: string) {
   if (el) el.textContent = text;
 }
-
 function show(el: HTMLElement) {
   el.classList.remove('hidden');
 }
@@ -1269,4 +1809,4 @@ function hide(el: HTMLElement) {
   el.classList.add('hidden');
 }
 
-init();
+void init();

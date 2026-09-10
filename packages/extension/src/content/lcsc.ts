@@ -61,27 +61,67 @@ function tryExtractMpn(): string | null {
   return null;
 }
 
-// Run extraction (IIFE to avoid redeclaration on re-inject)
+// Run extraction (IIFE to avoid redeclaration on re-inject). LCSC is a Vue SPA:
+// clicking a related part changes the URL without a reload, so the C-number is
+// re-read whenever the location changes and the part is re-announced.
 (() => {
-  const lcscId = extractLcscIdFromUrl();
+  const w = window as unknown as Record<string, unknown>;
+  if (w.__kicadLcscActive) return;
+  w.__kicadLcscActive = true;
 
-  if (lcscId) {
-    const part: DetectedPart = {
-      mpn: lcscId,
-      lcscId,
-      source: 'lcsc',
-      pageUrl: window.location.href,
-    };
-
-    chrome.runtime.sendMessage({ type: 'PART_DETECTED', part });
-
-    observeForMpn((mpn) => {
-      part.mpn = mpn;
-      chrome.runtime.sendMessage({ type: 'PART_DETECTED', part });
-    });
-  } else {
-    chrome.runtime.sendMessage({ type: 'NO_PART_FOUND' });
+  function send(message: Record<string, unknown>) {
+    try {
+      const p = chrome.runtime.sendMessage(message);
+      if (p && typeof (p as Promise<unknown>).catch === 'function') (p as Promise<unknown>).catch(() => {});
+    } catch {
+      /* extension reloaded underneath the page */
+    }
   }
+
+  let announcedFor = '';
+
+  function announce() {
+    const lcscId = extractLcscIdFromUrl();
+    const key = `${lcscId ?? ''}@${location.pathname}`;
+    if (key === announcedFor) return;
+    announcedFor = key;
+
+    if (!lcscId) {
+      send({ type: 'NO_PART_FOUND' });
+      return;
+    }
+    const part: DetectedPart = { mpn: lcscId, lcscId, source: 'lcsc', pageUrl: window.location.href };
+    send({ type: 'PART_DETECTED', part });
+    observeForMpn((mpn) => {
+      // The page may have moved on while we waited for the table to render.
+      if (extractLcscIdFromUrl() !== lcscId) return;
+      part.mpn = mpn;
+      send({ type: 'PART_DETECTED', part });
+    });
+  }
+
+  announce();
+
+  // Detect client-side navigation: history API + a light poll as a safety net.
+  let lastHref = location.href;
+  const check = () => {
+    if (location.href !== lastHref) {
+      lastHref = location.href;
+      announce();
+    }
+  };
+  window.addEventListener('popstate', check);
+  const origPush = history.pushState.bind(history);
+  const origReplace = history.replaceState.bind(history);
+  history.pushState = ((...args: Parameters<History['pushState']>) => {
+    origPush(...args);
+    check();
+  }) as History['pushState'];
+  history.replaceState = ((...args: Parameters<History['replaceState']>) => {
+    origReplace(...args);
+    check();
+  }) as History['replaceState'];
+  setInterval(check, 1000);
 })();
 
 // Re-export for testing

@@ -21,10 +21,21 @@ import { uuidFromModelUrl } from './model3d-url.js';
 export interface Preview3dHandle {
   /** Stop animation, remove listeners, free GPU + DOM resources. */
   dispose(): void;
+  /** Stop the render loop (hidden tab / hidden document) without freeing anything. */
+  pause(): void;
+  /** Restart the render loop after {@link pause}. */
+  resume(): void;
 }
 
 /** A no-op handle (used for the static "no model" / "error" states). */
-const NOOP: Preview3dHandle = { dispose() {} };
+const NOOP: Preview3dHandle = { dispose() {}, pause() {}, resume() {} };
+
+/** What a mounted scene exposes back to the handle. */
+interface SceneControls {
+  teardown(): void;
+  pause(): void;
+  resume(): void;
+}
 
 /** Build a small status block (icon glyph + message) for empty/error states. */
 function statusBlock(kind: 'empty' | 'error' | 'loading', message: string): HTMLElement {
@@ -88,7 +99,8 @@ export function mount3dPreview(
   container.appendChild(loading);
 
   let disposed = false;
-  let teardown: (() => void) | null = null;
+  let scene: SceneControls | null = null;
+  let paused = false;
 
   const fail = (msg: string): void => {
     if (disposed) return;
@@ -115,7 +127,7 @@ export function mount3dPreview(
 
     let objText: string;
     try {
-      const resp = await fetch(url);
+      const resp = await fetch(url, { signal: AbortSignal.timeout(60_000) });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       objText = await resp.text();
       if (!/^\s*(v|vn|f|g|o|usemtl)\b/m.test(objText)) {
@@ -128,7 +140,8 @@ export function mount3dPreview(
     if (disposed) return;
 
     try {
-      teardown = buildScene(three, OBJLoaderMod.OBJLoader, container, objText);
+      scene = buildScene(three, OBJLoaderMod.OBJLoader, container, objText);
+      if (paused) scene.pause();
     } catch {
       fail('Could not render the 3D model.');
     }
@@ -137,10 +150,16 @@ export function mount3dPreview(
   return {
     dispose() {
       disposed = true;
-      if (teardown) {
-        teardown();
-        teardown = null;
-      }
+      scene?.teardown();
+      scene = null;
+    },
+    pause() {
+      paused = true;
+      scene?.pause();
+    },
+    resume() {
+      paused = false;
+      scene?.resume();
     },
   };
 }
@@ -173,7 +192,7 @@ function buildScene(
   OBJLoader: typeof import('three/examples/jsm/loaders/OBJLoader.js').OBJLoader,
   container: HTMLElement,
   objText: string,
-): () => void {
+): SceneControls {
   const obj = new OBJLoader().parse(stripInlinedMtl(objText));
 
   // Replace EasyEDA's materials with one calm metallic so it reads on the dark
@@ -248,11 +267,22 @@ function buildScene(
     camera.updateProjectionMatrix();
   };
   resize();
-  const ro =
-    typeof ResizeObserver !== 'undefined'
-      ? new ResizeObserver(() => resize())
-      : null;
-  ro?.observe(container);
+  // The canvas can move between documents (Document Picture-in-Picture moves
+  // the whole UI into another window), so the observer is (re)created from
+  // whichever window currently owns the canvas.
+  let ro: ResizeObserver | null = null;
+  let roDoc: Document | null = null;
+  const ensureObserver = (): void => {
+    const doc = canvas.ownerDocument;
+    if (doc === roDoc) return;
+    ro?.disconnect();
+    roDoc = doc;
+    const RO = (doc.defaultView as (Window & { ResizeObserver?: typeof ResizeObserver }) | null)?.ResizeObserver;
+    ro = RO ? new RO(() => resize()) : null;
+    ro?.observe(container);
+    resize();
+  };
+  ensureObserver();
 
   // --- Drag-to-orbit. Pointer drag spins the pivot; releasing resumes auto-spin.
   let dragging = false;
@@ -285,17 +315,38 @@ function buildScene(
   canvas.addEventListener('pointerup', onUp);
   canvas.addEventListener('pointercancel', onUp);
 
-  // --- Render loop.
+  // --- Render loop. Scheduled on the window that currently owns the canvas so
+  // the preview keeps animating after a move into a PiP window (the opener's
+  // rAF is throttled to ~0 once its tab is in the background).
   let raf = 0;
+  let rafWindow: Window = canvas.ownerDocument.defaultView ?? window;
+  let running = false;
   const tick = (): void => {
+    if (!running) return;
+    ensureObserver();
     if (autoRotate) pivot.rotation.z += 0.006;
     renderer.render(scene, camera);
-    raf = requestAnimationFrame(tick);
+    rafWindow = canvas.ownerDocument.defaultView ?? window;
+    raf = rafWindow.requestAnimationFrame(tick);
   };
-  raf = requestAnimationFrame(tick);
+  const start = (): void => {
+    if (running) return;
+    running = true;
+    rafWindow = canvas.ownerDocument.defaultView ?? window;
+    raf = rafWindow.requestAnimationFrame(tick);
+  };
+  const stop = (): void => {
+    running = false;
+    try {
+      rafWindow.cancelAnimationFrame(raf);
+    } catch {
+      /* window gone */
+    }
+  };
+  start();
 
-  return () => {
-    cancelAnimationFrame(raf);
+  const teardown = (): void => {
+    stop();
     ro?.disconnect();
     canvas.removeEventListener('pointerdown', onDown);
     canvas.removeEventListener('pointermove', onMove);
@@ -311,4 +362,6 @@ function buildScene(
     renderer.forceContextLoss?.();
     if (canvas.parentNode) canvas.parentNode.removeChild(canvas);
   };
+
+  return { teardown, pause: stop, resume: start };
 }

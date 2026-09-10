@@ -50,10 +50,11 @@ function extractPartFromJsonLd(): DetectedPart | null {
 // Run extraction and notify background (IIFE to avoid redeclaration on re-inject)
 (() => {
   const part = extractPartFromJsonLd();
-  if (part) {
-    chrome.runtime.sendMessage({ type: 'PART_DETECTED', part });
-  } else {
-    chrome.runtime.sendMessage({ type: 'NO_PART_FOUND' });
+  try {
+    const p = chrome.runtime.sendMessage(part ? { type: 'PART_DETECTED', part } : { type: 'NO_PART_FOUND' });
+    if (p && typeof (p as Promise<unknown>).catch === 'function') (p as Promise<unknown>).catch(() => {});
+  } catch {
+    /* extension reloaded underneath the page — nothing to do */
   }
 })();
 

@@ -25,6 +25,9 @@ const EASYEDA_API_VERSION = '6.4.19.5';
 /** Validates an LCSC part id, e.g. "C3235557". */
 const LCSC_ID_RE = /^C\d+$/;
 
+/** Deadline for one component fetch through the relay. */
+const EASYEDA_TIMEOUT_MS = 20_000;
+
 /** Metadata pulled deterministically from the EasyEDA component JSON. */
 export interface ConvertMeta {
   lcsc: string;
@@ -125,20 +128,34 @@ export async function fetchEasyedaComponent(
 
   const url = `${trimTrailingSlash(relayBase)}/easyeda/component?lcsc=${encodeURIComponent(lcscId)}`;
 
-  const resp = await fetch(url, {
-    headers: {
-      Accept: 'application/json, text/javascript, */*; q=0.01',
-      'Accept-Language': 'en-US,en;q=0.9',
-    },
-  });
+  let resp: Response;
+  try {
+    resp = await fetch(url, {
+      headers: {
+        Accept: 'application/json, text/javascript, */*; q=0.01',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+      signal: AbortSignal.timeout(EASYEDA_TIMEOUT_MS),
+    });
+  } catch (err) {
+    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      throw new Error(`The relay took too long to answer for ${lcscId}. Check the relay URL and try again.`);
+    }
+    throw new Error(`Could not reach the relay for ${lcscId}. Check the relay URL and your connection.`);
+  }
 
   if (!resp.ok) {
     throw new Error(`EasyEDA request failed for ${lcscId}: HTTP ${resp.status} ${resp.statusText}`);
   }
 
-  const data = (await resp.json()) as { success?: boolean; result?: EasyedaResult };
+  let data: { success?: boolean; result?: EasyedaResult };
+  try {
+    data = (await resp.json()) as { success?: boolean; result?: EasyedaResult };
+  } catch {
+    throw new Error(`The relay returned something that is not JSON for ${lcscId}. Is the relay URL correct?`);
+  }
   if (!data.success || !data.result) {
-    throw new Error(`EasyEDA returned no component for ${lcscId}`);
+    throw new Error(`EasyEDA has no data for ${lcscId}. Try one of the other sources below.`);
   }
 
   return data.result;

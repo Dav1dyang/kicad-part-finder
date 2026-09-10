@@ -7,6 +7,11 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
+  applySymbolMeta,
+  renameSymbol,
+  safeFootprintName,
+  setFootprintName,
+  setSymbolProperty,
   mergeSymbolLibrary,
   extractSymbolName,
   extractSymbolBlocks,
@@ -311,5 +316,92 @@ describe('updateExistingSymbolFootprintRef', () => {
     const { text, changed } = updateExistingSymbolFootprintRef(lib, 'NOFP', 'DavidLib_X:Y');
     expect(changed).toBe(false);
     expect(text).toBe(lib);
+  });
+});
+
+describe('mergeSymbolLibrary insertion point', () => {
+  it('inserts inside the library even when a trailing comment contains a paren', () => {
+    const existing = '(kicad_symbol_lib (version 20211014) (generator easyeda2kicad)\n  (symbol "A" (property "Value" "A" (id 1) (at 0 0 0)))\n)\n# generated (v0.8)\n';
+    const merged = mergeSymbolLibrary(existing, '(symbol "B" (property "Value" "B" (id 1) (at 0 0 0)))');
+    expect(merged.added).toBe(true);
+    const libClose = merged.text.indexOf('\n)\n# generated');
+    expect(libClose).toBeGreaterThan(merged.text.indexOf('(symbol "B"'));
+    expect(merged.text.endsWith('# generated (v0.8)\n')).toBe(true);
+  });
+});
+
+describe('safeFootprintName / setFootprintName', () => {
+  it('replaces characters that are illegal in file names', () => {
+    expect(safeFootprintName('SOT-23/8')).toBe('SOT-23_8');
+    expect(safeFootprintName('QFN:16 "x"')).toBe('QFN_16__x_');
+    expect(safeFootprintName('...')).toBe('Footprint');
+    expect(safeFootprintName('LQFP-48')).toBe('LQFP-48');
+  });
+  it('rewrites the footprint token to match', () => {
+    expect(setFootprintName('(footprint "SOT-23/8" (layer "F.Cu"))', 'SOT-23_8')).toBe('(footprint "SOT-23_8" (layer "F.Cu"))');
+  });
+});
+
+const FULL_SYM = [
+  '(kicad_symbol_lib (version 20211014) (generator easyeda2kicad)',
+  '  (symbol "TPS2116" (pin_names (offset 1.016)) (in_bom yes) (on_board yes)',
+  '    (property "Reference" "U" (id 0) (at 0 2.54 0)',
+  '      (effects (font (size 1.27 1.27)))',
+  '    )',
+  '    (property "Value" "TPS2116" (id 1) (at 0 -2.54 0)',
+  '      (effects (font (size 1.27 1.27)))',
+  '    )',
+  '    (property "Footprint" "SOT-23-8" (id 2) (at 0 0 0)',
+  '      (effects (font (size 1.27 1.27)) hide)',
+  '    )',
+  '    (property "Datasheet" "" (id 3) (at 0 0 0)',
+  '      (effects (font (size 1.27 1.27)) hide)',
+  '    )',
+  '    (symbol "TPS2116_0_1"',
+  '      (rectangle (start -5 5) (end 5 -5))',
+  '    )',
+  '  )',
+  ')',
+].join('\n');
+
+describe('setSymbolProperty', () => {
+  it('rewrites an existing property in place', () => {
+    const out = setSymbolProperty(FULL_SYM, 'Datasheet', 'https://ti.com/x.pdf');
+    expect(out).toContain('(property "Datasheet" "https://ti.com/x.pdf" (id 3)');
+    expect(out.split('(property').length).toBe(FULL_SYM.split('(property').length);
+  });
+  it('adds a missing property after the last one with the next id', () => {
+    const out = setSymbolProperty(FULL_SYM, 'Manufacturer', 'Texas "TI" Instruments');
+    expect(out).toContain('(property "Manufacturer" "Texas \\"TI\\" Instruments" (id 4) (at 0 0 0)');
+    expect(out.indexOf('"Manufacturer"')).toBeLessThan(out.indexOf('(symbol "TPS2116_0_1"'));
+  });
+  it('does not add an empty property', () => {
+    expect(setSymbolProperty(FULL_SYM, 'Package', '')).toBe(FULL_SYM);
+  });
+});
+
+describe('applySymbolMeta', () => {
+  it('renames the symbol and its sub-symbols when the MPN is corrected', () => {
+    const out = applySymbolMeta(FULL_SYM, { mpn: 'TPS2116DRLR' });
+    expect(out).toContain('(symbol "TPS2116DRLR" (pin_names');
+    expect(out).toContain('(symbol "TPS2116DRLR_0_1"');
+    expect(out).not.toContain('"TPS2116"');
+    expect(out).toContain('(property "Value" "TPS2116DRLR"');
+    expect(out).toContain('(property "MPN" "TPS2116DRLR"');
+  });
+  it('writes manufacturer, package, datasheet and keeps the file well-formed', () => {
+    const out = applySymbolMeta(FULL_SYM, { manufacturer: 'TI', package: 'SOT-23-8', datasheet: 'https://x' });
+    expect(out).toContain('(property "Manufacturer" "TI"');
+    expect(out).toContain('(property "Package" "SOT-23-8"');
+    expect(out).toContain('(property "Datasheet" "https://x"');
+    const opens = (out.match(/\(/g) ?? []).length;
+    const closes = (out.match(/\)/g) ?? []).length;
+    expect(opens).toBe(closes);
+  });
+  it('is a no-op for empty metadata', () => {
+    expect(applySymbolMeta(FULL_SYM, {})).toBe(FULL_SYM);
+  });
+  it('renameSymbol leaves unrelated names alone', () => {
+    expect(renameSymbol('(symbol "TPS21160" (symbol "TPS2116_0_1"', 'TPS2116', 'X')).toBe('(symbol "TPS21160" (symbol "X_0_1"');
   });
 });

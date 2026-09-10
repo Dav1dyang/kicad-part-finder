@@ -18,6 +18,9 @@
  * be unit-tested with no DOM or FS.
  */
 
+/** Deadline for the STEP download (models can be several MB). */
+const MODEL_TIMEOUT_MS = 60_000;
+
 /** KiCad path-substitution var the lib tables resolve to the granted folder. */
 const KICAD_LIB_VAR = '${DAVID_KICAD_LIB}';
 
@@ -129,18 +132,174 @@ export function mergeSymbolLibrary(
     }
   }
 
-  // Insert before the final top-level ')'.
-  const lastParen = existing.lastIndexOf(')');
-  if (lastParen === -1) {
+  // Insert before the paren that closes the top-level `(kicad_symbol_lib …)`
+  // form. A depth scan (not `lastIndexOf(')')`) so a trailing comment or
+  // stray text containing `)` can't push the new symbol outside the library.
+  const closeAt = findLibraryClose(existing);
+  if (closeAt === -1) {
     // Malformed (no closing paren) — append defensively.
     const text = `${existing.replace(/\s*$/, '')}\n${indentBlock(block)}\n`;
     return { text, name, added: true };
   }
 
-  const before = existing.slice(0, lastParen).replace(/\s*$/, '');
-  const after = existing.slice(lastParen); // starts at the ')'
+  const before = existing.slice(0, closeAt).replace(/\s*$/, '');
+  const after = existing.slice(closeAt); // starts at the ')'
   const text = `${before}\n${indentBlock(block)}\n${after}`;
   return { text, name, added: true };
+}
+
+/**
+ * Index of the `)` that closes the first top-level `(kicad_symbol_lib` form
+ * (string-aware depth scan). Falls back to the last `)` in the text when the
+ * wrapper is missing, or -1 when there is no paren at all.
+ */
+function findLibraryClose(text: string): number {
+  const start = text.indexOf('(kicad_symbol_lib');
+  if (start === -1) return text.lastIndexOf(')');
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === '\\') i++;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '(') depth++;
+    else if (ch === ')') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return text.lastIndexOf(')');
+}
+
+/**
+ * Characters that are illegal in file names on at least one OS. A footprint
+ * name is used both as `<name>.kicad_mod` and inside the symbol's
+ * `Lib:Name` reference, so it is sanitised ONCE and used for both.
+ */
+export function safeFootprintName(name: string): string {
+  const cleaned = name
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/^[. ]+|[. ]+$/g, '');
+  return cleaned || 'Footprint';
+}
+
+/** Rewrite the `(footprint "NAME"` token so the file's own name matches the file name. */
+export function setFootprintName(footprintText: string, name: string): string {
+  return footprintText.replace(/\(footprint\s+"(?:[^"\\]|\\.)*"/, `(footprint "${escapeKi(name)}"`);
+}
+
+/** Escape a value for a KiCad quoted string. */
+function escapeKi(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/** KiCad symbol ids may only contain these characters (mirrors the converter). */
+function sanitizeSymbolId(value: string): string {
+  return value.replace(/[^A-Za-z0-9_.+-]/g, '_');
+}
+
+/** Metadata the user may have edited in the card before installing. */
+export interface SymbolMeta {
+  mpn?: string;
+  manufacturer?: string;
+  datasheet?: string;
+  package?: string;
+  lcsc?: string;
+  description?: string;
+}
+
+/**
+ * Set (or add) one `(property "Name" "value" …)` on the top-level symbol.
+ * Existing properties are rewritten in place (escape-aware). A missing one is
+ * inserted as a hidden property right after the last existing property so the
+ * ids stay sequential. Pure.
+ */
+export function setSymbolProperty(symbolText: string, name: string, value: string): string {
+  const re = new RegExp(`(\\(property\\s+"${escapeRegExp(name)}"\\s+")((?:[^"\\\\]|\\\\.)*)(")`);
+  if (re.test(symbolText)) {
+    return symbolText.replace(re, (_m, p1, _old, p3) => `${p1}${escapeKi(value)}${p3}`);
+  }
+  if (!value) return symbolText;
+  // Find the last top-level property block and insert after it.
+  const propRe = /\(property\s+"(?:[^"\\]|\\.)*"\s+"(?:[^"\\]|\\.)*"\s+\(id\s+(\d+)\)/g;
+  let last: RegExpExecArray | null = null;
+  let m: RegExpExecArray | null;
+  let maxId = -1;
+  while ((m = propRe.exec(symbolText)) !== null) {
+    last = m;
+    maxId = Math.max(maxId, Number(m[1]));
+  }
+  if (!last) return symbolText;
+  // Walk to the end of that property's block.
+  let depth = 0;
+  let i = last.index;
+  let inString = false;
+  for (; i < symbolText.length; i++) {
+    const ch = symbolText[i];
+    if (inString) {
+      if (ch === '\\') i++;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '(') depth++;
+    else if (ch === ')') {
+      depth--;
+      if (depth === 0) {
+        i++;
+        break;
+      }
+    }
+  }
+  const indent = symbolText.slice(0, last.index).match(/(^|\n)([ \t]*)$/)?.[2] ?? '    ';
+  const block =
+    `\n${indent}(property "${escapeKi(name)}" "${escapeKi(value)}" (id ${maxId + 1}) (at 0 0 0)` +
+    `\n${indent}  (effects (font (size 1.27 1.27)) hide)` +
+    `\n${indent})`;
+  return symbolText.slice(0, i) + block + symbolText.slice(i);
+}
+
+/**
+ * Apply the card's edited metadata to a converted symbol: `Value` and `MPN`
+ * follow the MPN, `Datasheet`/`Manufacturer`/`Package`/`LCSC`/`Description`
+ * are written when present. When the MPN changed the symbol (and its `_0_1`
+ * style sub-symbols) is renamed to match, so the library entry carries the
+ * corrected part number. Pure.
+ */
+export function applySymbolMeta(symbolText: string, meta: SymbolMeta): string {
+  let text = symbolText;
+  const mpn = (meta.mpn ?? '').trim();
+  if (mpn) {
+    const oldName = extractSymbolName(text);
+    const newName = sanitizeSymbolId(mpn);
+    if (oldName && oldName !== newName) text = renameSymbol(text, oldName, newName);
+    text = setSymbolProperty(text, 'Value', mpn);
+    text = setSymbolProperty(text, 'MPN', mpn);
+  }
+  const fields: Array<[string, string | undefined]> = [
+    ['Datasheet', meta.datasheet],
+    ['Manufacturer', meta.manufacturer],
+    ['Package', meta.package],
+    ['LCSC', meta.lcsc],
+    ['Description', meta.description],
+  ];
+  for (const [name, value] of fields) {
+    const v = (value ?? '').trim();
+    // Datasheet always exists in converter output; only ADD the others when set.
+    if (v || name === 'Datasheet') text = setSymbolProperty(text, name, v);
+  }
+  return text;
+}
+
+/** Rename `(symbol "old"` and its `(symbol "old_<unit>_<style>"` children. Pure. */
+export function renameSymbol(symbolText: string, oldName: string, newName: string): string {
+  const re = new RegExp(`\\(symbol\\s+"${escapeRegExp(oldName)}(_\\d+_\\d+)?"`, 'g');
+  return symbolText.replace(re, (_m, suffix: string | undefined) => `(symbol "${escapeKi(newName)}${suffix ?? ''}"`);
 }
 
 /** Indent every line of a block by two spaces (matches the file's symbol style). */
@@ -422,6 +581,33 @@ export async function getSavedFolder(): Promise<FileSystemDirectoryHandle | null
   return request === 'granted' ? handle : null;
 }
 
+/** The saved folder handle and whether it can be used right now. */
+export type FolderPermission = 'granted' | 'prompt' | 'none';
+
+/**
+ * Look at the saved folder WITHOUT prompting: `granted` means writes will work
+ * now, `prompt` means a handle exists but Chrome wants a click to re-grant it
+ * (typical after a browser restart), `none` means no folder was ever chosen.
+ */
+export async function peekSavedFolder(): Promise<{
+  handle: FileSystemDirectoryHandle | null;
+  permission: FolderPermission;
+}> {
+  let handle: FileSystemDirectoryHandle | undefined;
+  try {
+    handle = await idbGet<FileSystemDirectoryHandle>(HANDLE_KEY);
+  } catch {
+    return { handle: null, permission: 'none' };
+  }
+  if (!handle) return { handle: null, permission: 'none' };
+  try {
+    const state = await (handle as any).queryPermission({ mode: 'readwrite' });
+    return { handle, permission: state === 'granted' ? 'granted' : 'prompt' };
+  } catch {
+    return { handle, permission: 'prompt' };
+  }
+}
+
 /** Forget the stored folder handle (used by a "change folder" affordance). */
 export async function clearSavedFolder(): Promise<void> {
   await idbDelete(HANDLE_KEY);
@@ -484,7 +670,16 @@ export interface InstallPartResult {
   footprintName: string;
   /** '' = no model attempted, 'ok' = written, otherwise a short skip reason. */
   modelStatus: string;
+  /** True when this install created the `.kicad_sym` file (KiCad must be restarted to see it). */
+  libraryCreated: boolean;
   errors: string[];
+}
+
+/** Run `fn` under a Web Lock when available (same-origin documents share it). */
+async function withLock<T>(name: string, fn: () => Promise<T>): Promise<T> {
+  const locks = (globalThis.navigator as { locks?: { request: (n: string, cb: () => Promise<T>) => Promise<T> } } | undefined)?.locks;
+  if (locks && typeof locks.request === 'function') return locks.request(name, fn);
+  return fn();
 }
 
 /**
@@ -515,6 +710,7 @@ export async function installPart(
     symbolName: null,
     footprintName: 'Footprint',
     modelStatus: '',
+    libraryCreated: false,
     errors: [],
   };
 
@@ -524,13 +720,15 @@ export async function installPart(
   const symLibName = `${libNick}.kicad_sym`;
   const prettyName = `${libNick}.pretty`;
 
-  let footprintText = input.footprint;
-  result.footprintName = extractFootprintName(footprintText);
+  // One sanitised footprint name serves as the file name AND the reference.
+  result.footprintName = safeFootprintName(extractFootprintName(input.footprint));
+  let footprintText = setFootprintName(input.footprint, result.footprintName);
 
-  // Qualify the symbol's Footprint field as `DavidLib_<bucket>:<fpName>` so KiCad
-  // links symbol -> footprint automatically (a bare name => "Invalid footprint").
+  // Apply the card's edits (MPN, manufacturer, package, datasheet), then
+  // qualify the symbol's Footprint field as `DavidLib_<bucket>:<fpName>` so
+  // KiCad links symbol -> footprint automatically.
   const footprintRef = `${libNick}:${result.footprintName}`;
-  const symbolText = setSymbolFootprintRef(input.symbol, footprintRef);
+  const symbolText = setSymbolFootprintRef(applySymbolMeta(input.symbol, input.meta), footprintRef);
 
   // --- 3D model (best-effort, before the footprint is written) ---------------
   if (input.model3dUrl) {
@@ -541,7 +739,7 @@ export async function installPart(
       try {
         // Fetch the STEP through the relay; the Worker streams the bytes back
         // from EasyEDA's module store server-side (the browser is WAF-blocked).
-        const resp = await fetch(dl.stepUrl);
+        const resp = await fetch(dl.stepUrl, { signal: AbortSignal.timeout(MODEL_TIMEOUT_MS) });
         if (!resp.ok) {
           result.modelStatus = `skipped (HTTP ${resp.status})`;
         } else {
@@ -559,15 +757,23 @@ export async function installPart(
           }
         }
       } catch (err) {
-        result.modelStatus = `skipped (${err instanceof Error ? err.message : 'fetch failed'})`;
+        const timedOut = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
+        result.modelStatus = timedOut
+          ? 'skipped (download timed out)'
+          : `skipped (${err instanceof Error ? err.message : 'fetch failed'})`;
       }
     }
   }
 
   // --- Symbol: read → merge (append/dedupe) → write --------------------------
+  // The read-modify-write is guarded by a Web Lock so two finder documents
+  // (e.g. a side panel and an overlay helper window) can't lose a symbol by
+  // writing the same library at once.
   try {
+    await withLock(`kicad-part-finder:${symLibName}`, async () => {
     const symbolsDir = await getDir(root, 'symbols');
     const existing = await readFileText(symbolsDir, symLibName);
+    result.libraryCreated = existing.trim() === '';
     const merged = mergeSymbolLibrary(existing, symbolText);
     result.symbolName = merged.name;
     result.symbolAdded = merged.added;
@@ -591,6 +797,7 @@ export async function installPart(
       // No usable symbol name (nothing to insert or upgrade) — report the path.
       result.written.push(`symbols/${symLibName} (deduped)`);
     }
+    });
   } catch (err) {
     result.errors.push(`symbol: ${err instanceof Error ? err.message : 'write failed'}`);
   }

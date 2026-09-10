@@ -1,32 +1,24 @@
-# Extension Notes
+# Extension notes
 
-This package is a no-server Manifest V3 Chrome extension. Do not reintroduce
-the retired companion-server flow for conversion or library writes.
+This package is a no-server Manifest V3 Chrome extension. Do not reintroduce the retired companion-server flow for conversion or library writes.
 
-JLCPCB and EasyEDA WAF-block the browser directly (HTTP 403 even with spoofed
-headers), so every JLCPCB/EasyEDA call routes through the user's deployed
-**Cloudflare Worker relay** (`packages/relay`). The Worker origin is stored in
-`chrome.storage.local` under `relayUrl` (set via the side panel's "Relay URL"
-field) and threaded into the converter/JLCPCB/library-writer functions as a
-`relayBase` argument. The old `declarativeNetRequest` Referer hack (`rules.json`)
-is gone.
+JLCPCB and EasyEDA block the browser directly (HTTP 403 even with spoofed headers), so every JLCPCB/EasyEDA call routes through the user's deployed relay (`packages/relay`, Cloudflare Worker or Vercel edge function). The relay origin is stored in `chrome.storage.local` under `relayUrl`, normalized by `src/lib/relay-url.ts`, and threaded into the converter, JLCPCB, and library-writer functions as a `relayBase` argument.
 
 Key paths:
 
-- `src/background/service-worker.ts` reads `relayUrl` from `chrome.storage.local`
-  and routes detected-part, conversion, and JLCPCB lookup messages; it replies
-  with `error: "relay URL not set"` when unset.
-- `src/lib/converter/easyeda.ts` fetches EasyEDA data via the relay; public API
-  is `convertLcsc(lcscId, relayBase)` / `fetchEasyedaComponent(lcscId, relayBase)`.
-- `src/lib/jlcpcb.ts` resolves MPNs via the relay
-  (`resolveMpnDetailed(mpn, relayBase)`).
-- `src/lib/library-writer.ts` writes symbols, footprints, and STEP models via
-  the File System Access API; `installPart(root, input, relayBase)` and
-  `resolveModelDownload(model3dUrl, relayBase)` fetch the STEP through the relay.
+- `src/background/service-worker.ts` keeps all state in `chrome.storage.session`, routes `PART_DETECTED`, `CONVERT`, `RESOLVE_MPN`, and the `OVERLAY_*` messages, handles the three commands, and replies with `error: "relay URL not set"` when the relay is missing.
+- `src/lib/converter/easyeda.ts` fetches EasyEDA data via the relay: `convertLcsc(lcscId, relayBase)`.
+- `src/lib/jlcpcb.ts` resolves MPNs via the relay: `resolveMpnDetailed(mpn, relayBase)`. Exact MPN hits sort first.
+- `src/lib/library-writer.ts` writes symbols, footprints, and STEP models via the File System Access API. `installPart(root, input, relayBase)` applies the card's edited metadata (`applySymbolMeta`), sanitizes the footprint file name, merges under a Web Lock, and reports `libraryCreated`.
+- `src/lib/shortcuts.ts` is the pure keyboard-shortcut model (parse, format, validate, dispatch). `src/lib/relay-url.ts` is the pure relay-URL model.
+- `src/sidepanel/sidepanel.ts` is the UI. Every search or convert carries a sequence number and drops stale responses.
+
+Every relay fetch has a deadline (`AbortSignal.timeout`). Keep it that way when adding endpoints.
 
 Required checks from the repo root:
 
 ```sh
 pnpm test
 pnpm --filter @kicad-part-finder/extension build
+pnpm --filter @kicad-part-finder/extension exec tsc --noEmit
 ```

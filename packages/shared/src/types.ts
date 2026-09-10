@@ -6,6 +6,8 @@ export interface DetectedPart {
   lcscId?: string;
   source: 'digikey' | 'lcsc' | 'selection';
   pageUrl: string;
+  /** Set by the "Search highlighted text" command: search as soon as the finder opens. */
+  autoSearch?: boolean;
 }
 
 /** File availability from a component source */

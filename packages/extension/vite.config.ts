@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 import { resolve } from 'path';
 import { cpSync } from 'fs';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
@@ -28,7 +28,9 @@ export default defineConfig({
     },
     target: 'es2022',
     minify: false,
-    sourcemap: true,
+    // Source maps triple the shipped size (three.js alone is 3 MB of map);
+    // keep them for `pnpm dev:extension` only.
+    sourcemap: mode === 'development',
   },
   resolve: {
     alias: {
@@ -64,4 +66,4 @@ export default defineConfig({
       },
     },
   ],
-});
+}));
