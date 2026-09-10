@@ -1242,6 +1242,7 @@ code {
 }
 
 .setting-block--first { margin-top: 0; padding-top: 0; border-top: 0; }
+.btn-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 
 .section-title {
   display: flex;

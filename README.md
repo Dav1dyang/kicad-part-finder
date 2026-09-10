@@ -139,7 +139,10 @@ On Vercel the endpoints live under `/api`, so the URL must end in `/api`. On Clo
 The relay is up but JLCPCB refused it, usually a temporary block. Wait a minute, or paste the exact LCSC number, which uses EasyEDA instead.
 
 **The Library pill says "Reconnect folder"**
-Chrome forgets folder grants whenever the panel's page is reloaded, for example after a browser restart. Click the pill once to re-allow it. If no prompt appears (Arc sometimes hides it in popup windows), click **Choose library folder** in the setup card, or use **Open in a tab** and pick the folder there. The floating window keeps its grant as long as it stays open.
+Chrome forgets folder grants whenever the panel's page is reloaded, for example after a browser restart. Click the pill once to re-allow it. The floating window keeps its grant as long as it stays open.
+
+**No folder dialog appears (Arc floating window)**
+Arc's floating popup window does not show native folder dialogs or permission prompts. Click **Choose in a tab instead** (or **Open in a tab** in the message that appears). A normal tab opens, the dialog works there, and the floating window picks up the folder by itself. You can close the tab afterwards.
 
 **Installed, but KiCad does not show the part**
 If the install created a new library file, restart KiCad. Otherwise open the Symbol Editor or Footprint Editor and reload the library. Also confirm `${DAVID_KICAD_LIB}` points at your `kicad-libraries` folder in KiCad's path settings.
