@@ -82,6 +82,7 @@ const OVERLAY_CSS = `
     cursor: grab;
     flex: 0 0 auto;
     touch-action: none;
+    user-select: none;
   }
   .panel.is-dragging .ov-header { cursor: grabbing; }
 
@@ -211,7 +212,9 @@ const OVERLAY_CSS = `
   panel.innerHTML = PANEL_HTML;
   shadow.appendChild(panel);
 
-  (document.body || document.documentElement).appendChild(host);
+  // Attach to <html>, not <body>: a transformed/filtered body would become the
+  // containing block for our fixed panel and drift it away from the viewport.
+  document.documentElement.appendChild(host);
 
   // --- Element refs ----------------------------------------------------------
   const headerEl = panel.querySelector('.ov-header') as HTMLElement;
@@ -231,17 +234,18 @@ const OVERLAY_CSS = `
   bodyEl.appendChild(frame);
 
   // A few pages ship a strict CSP `frame-src` that can refuse even an
-  // extension-origin frame. The `load` event fires when the extension page
-  // mounts; if it hasn't fired shortly after, assume the frame was blocked and
-  // offer to open the finder in a normal window instead (so the panel never just
-  // shows blank). Cleared the moment the frame loads.
+  // extension-origin frame. The finder posts `kicad-overlay-ready` to us once
+  // its script runs (a positive signal; `load` also fires for a blocked
+  // frame's error document, so it is not used). If the message hasn't arrived
+  // within the watchdog, offer to open the finder in a normal window instead.
   let frameLoaded = false;
-  frame.addEventListener('load', () => {
-    frameLoaded = true;
-  });
+  const onReady = (e: MessageEvent) => {
+    if (e.source === frame.contentWindow && e.data?.type === 'kicad-overlay-ready') frameLoaded = true;
+  };
+  window.addEventListener('message', onReady);
   const frameWatchdog = setTimeout(() => {
     if (!frameLoaded) showFrameFallback();
-  }, 2500);
+  }, 8000);
 
   /** Replace the (blocked) iframe with a "open in a window" fallback. */
   function showFrameFallback() {
@@ -412,6 +416,9 @@ const OVERLAY_CSS = `
   /** Tear everything down cleanly and release the re-injection guard. */
   function teardown() {
     window.removeEventListener('resize', reclamp);
+    window.removeEventListener('message', onReady);
+    window.removeEventListener('message', onFrameMessage);
+    document.removeEventListener('keydown', onKeyDown, true);
     clearTimeout(frameWatchdog);
     try {
       host.remove();
@@ -427,6 +434,23 @@ const OVERLAY_CSS = `
   // iframe IS an extension page and handles them itself (refresh readiness /
   // success / failure), so the content script needs no message listener here. (A
   // previous header "pulse" listener was dead code — it could never fire.)
+
+  // Escape closes the overlay — from the host page (capture phase, only when
+  // the overlay is visible and focus isn't in a page input) and from inside
+  // the finder frame, which forwards its own Escape as a message.
+  function onKeyDown(e: KeyboardEvent) {
+    if (e.key !== 'Escape' || hidden) return;
+    const t = e.target as HTMLElement | null;
+    if (t?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+    teardown();
+  }
+  function onFrameMessage(e: MessageEvent) {
+    if (e.source !== frame.contentWindow) return;
+    if (e.data?.type === 'kicad-overlay-close') teardown();
+    else if (e.data?.type === 'kicad-overlay-minimize') toggleMinimize();
+  }
+  document.addEventListener('keydown', onKeyDown, true);
+  window.addEventListener('message', onFrameMessage);
 
   // --- Wire up listeners -----------------------------------------------------
   headerEl.addEventListener('pointerdown', onHeaderPointerDown);

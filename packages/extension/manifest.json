@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "KiCad Part Finder",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Find and install KiCad symbols, footprints, and 3D models from DigiKey and LCSC",
   "permissions": [
     "activeTab",
@@ -62,7 +62,21 @@
         "default": "Ctrl+Shift+K",
         "mac": "Command+Shift+K"
       },
-      "description": "Open KiCad Part Finder"
+      "description": "Open Part Finder"
+    },
+    "search-selection": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+L",
+        "mac": "Command+Shift+L"
+      },
+      "description": "Search the highlighted text"
+    },
+    "install-current": {
+      "suggested_key": {
+        "default": "Alt+Shift+I",
+        "mac": "Alt+Shift+I"
+      },
+      "description": "Install the part shown in Part Finder"
     }
   },
   "action": {
@@ -86,5 +100,10 @@
         "<all_urls>"
       ]
     }
+  ],
+  "minimum_chrome_version": "116",
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
   ]
 }
