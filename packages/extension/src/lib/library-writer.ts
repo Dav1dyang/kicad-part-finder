@@ -608,6 +608,21 @@ export async function peekSavedFolder(): Promise<{
   }
 }
 
+/**
+ * Ask Chrome to re-allow a handle we already hold. Must be called directly from
+ * a click: the permission prompt needs the user gesture, and any await before
+ * it (an IndexedDB read, for example) can spend that gesture. Returns true when
+ * writes are allowed now.
+ */
+export async function requestFolderPermission(handle: FileSystemDirectoryHandle): Promise<boolean> {
+  try {
+    const state = await (handle as any).requestPermission({ mode: 'readwrite' });
+    return state === 'granted';
+  } catch {
+    return false;
+  }
+}
+
 /** Forget the stored folder handle (used by a "change folder" affordance). */
 export async function clearSavedFolder(): Promise<void> {
   await idbDelete(HANDLE_KEY);
