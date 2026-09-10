@@ -33,6 +33,12 @@
   }
 
   function send(text: string) {
+    // After the extension is reloaded, the old copy of this script lives on in
+    // the page with no chrome.runtime. Stop cleanly instead of throwing.
+    if (!chrome?.runtime?.id) {
+      detach();
+      return;
+    }
     try {
       const p = chrome.runtime.sendMessage({
         type: 'PART_DETECTED',

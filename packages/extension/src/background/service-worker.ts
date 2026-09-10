@@ -488,7 +488,13 @@ async function openFinderTab(sourceTabId: number): Promise<void> {
       const currentUrl = existing.url || existing.pendingUrl || '';
       // An empty URL means "unknown" (not "navigated away") — reuse the tab.
       if (!currentUrl || currentUrl.startsWith(finderPrefix)) {
-        await chrome.tabs.update(s.finderTabId, { url, active: true });
+        // Re-aim the live document instead of reloading it: a reload would
+        // throw away the folder grant, which Chrome only keeps per document.
+        if (!(await retargetFinder(s.finderTabId, sourceTabId))) {
+          await chrome.tabs.update(s.finderTabId, { url, active: true });
+        } else {
+          await chrome.tabs.update(s.finderTabId, { active: true });
+        }
         if (typeof existing.windowId === 'number') {
           await chrome.windows.update(existing.windowId, { focused: true });
         }
@@ -527,7 +533,10 @@ async function openFinderWindow(sourceTabId: number): Promise<void> {
     try {
       await chrome.windows.update(s.finderWindowId, { focused: true });
       const [view] = await chrome.tabs.query({ windowId: s.finderWindowId });
-      if (typeof view?.id === 'number') await chrome.tabs.update(view.id, { url });
+      // Same as the tab path: keep the document (and its folder grant) alive.
+      if (typeof view?.id === 'number' && !(await retargetFinder(view.id, sourceTabId))) {
+        await chrome.tabs.update(view.id, { url });
+      }
       return;
     } catch {
       await updateSession((st) => {
@@ -544,6 +553,22 @@ async function openFinderWindow(sourceTabId: number): Promise<void> {
     });
   } catch (err) {
     console.error('Failed to open finder window:', err);
+  }
+}
+
+/**
+ * Tell an already-open finder document (identified by its own tab id) which
+ * source tab it now belongs to, along with that tab's detected part. Returns
+ * false when no document answered (still loading, or navigated away), in
+ * which case the caller reloads it the old way.
+ */
+async function retargetFinder(finderTabId: number, sourceTabId: number): Promise<boolean> {
+  try {
+    const part = await getDetectedPart(sourceTabId);
+    const resp = await chrome.runtime.sendMessage({ type: 'RETARGET', finderTabId, tabId: sourceTabId, part });
+    return resp?.ok === true;
+  } catch {
+    return false;
   }
 }
 

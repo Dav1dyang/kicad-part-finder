@@ -28,9 +28,9 @@ import type { ConvertResult } from '../lib/converter/easyeda.js';
 import type { JlcMatch } from '../lib/jlcpcb.js';
 import { LIBRARY_CHOICES, categoryToBucket, type LibraryChoice } from '../lib/autosort.js';
 import {
-  getSavedFolder,
   peekSavedFolder,
   pickLibraryFolder,
+  requestFolderPermission,
   installPart,
   type FolderPermission,
   type InstallPartResult,
@@ -144,6 +144,8 @@ const sourceLinks = $('sourceLinks');
 // --- State -------------------------------------------------------------------
 let libraryFolder: FileSystemDirectoryHandle | null = null;
 let folderPermission: FolderPermission = 'none';
+/** The saved handle even when its grant lapsed, so a click can re-request it directly. */
+let savedHandle: FileSystemDirectoryHandle | null = null;
 /** Folder name when a handle exists but needs a click to re-grant. */
 let savedFolderName = '';
 let current: ConvertResult | null = null;
@@ -181,7 +183,8 @@ const runningInWindow = isWindowMode(location.search);
 const runningInOverlay = isOverlayMode(location.search);
 const runningInSetup = isSetupMode(location.search);
 const autoInstallLcsc = parseInstallLcsc(location.search);
-const sourceTabId = parseSourceTabId(location.search);
+/** The page this finder belongs to (tab/window mode). Re-aimed by RETARGET. */
+let sourceTabId = parseSourceTabId(location.search);
 const runningInHelper = runningInSetup || autoInstallLcsc !== null;
 
 const OVERLAY_LIB_KEY = 'overlayLibraryName';
@@ -195,7 +198,19 @@ const OVERLAY_INSTALL_WATCHDOG_MS = 120_000;
 async function init() {
   // Register the message listener FIRST so nothing broadcast during the
   // awaited setup below is missed.
-  chrome.runtime.onMessage.addListener(onRuntimeMessage);
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message?.type === 'RETARGET') {
+      // The worker re-aims THIS document at a new source tab instead of
+      // reloading it, so the folder grant survives. Answer only for our tab.
+      if (runningInHelper || runningInOverlay || message.finderTabId !== myOwnTabId) return false;
+      sourceTabId = typeof message.tabId === 'number' ? message.tabId : sourceTabId;
+      sendResponse({ ok: true });
+      if (message.part) offerOrSearch(message.part as DetectedPart, false);
+      return false;
+    }
+    onRuntimeMessage(message, sender);
+    return false;
+  });
 
   for (const choice of LIBRARY_CHOICES) {
     const opt = document.createElement('option');
@@ -205,8 +220,11 @@ async function init() {
   }
 
   // Readiness strip + setup.
-  libPill.addEventListener('click', () => void onLibraryAction());
-  chooseFolderBtn.addEventListener('click', () => void onLibraryAction());
+  // The pill re-requests a lapsed grant in one click; the setup button always
+  // opens the folder picker, so there is a path that works even when Chrome
+  // shows no permission prompt.
+  libPill.addEventListener('click', () => void onLibraryAction('pill'));
+  chooseFolderBtn.addEventListener('click', () => void onLibraryAction('pick'));
   relayPill.addEventListener('click', () => {
     if (!hasRelay()) openSetupFocusRelay();
     else toggleSettings();
@@ -401,7 +419,14 @@ function onRuntimeMessage(message: any, sender: chrome.runtime.MessageSender): v
     return;
   }
 
-  if (!runningInOverlay) return;
+  if (!runningInOverlay) {
+    // A folder granted in another finder document (a helper tab, say): pick
+    // up whatever state Chrome will give this document without a prompt.
+    if (message.type === 'OVERLAY_FOLDER_READY') {
+      void refreshFolderState().then(refreshReadiness);
+    }
+    return;
+  }
 
   if (message.type === 'OVERLAY_FOLDER_READY') {
     pickFolderInFlight = false;
@@ -1045,15 +1070,54 @@ async function refreshFolderState() {
   try {
     const { handle, permission } = await peekSavedFolder();
     folderPermission = permission;
+    savedHandle = handle;
     savedFolderName = handle?.name ?? '';
     libraryFolder = permission === 'granted' ? handle : null;
   } catch {
     folderPermission = 'none';
+    savedHandle = null;
     libraryFolder = null;
   }
 }
 
-async function onLibraryAction() {
+/** Record a freshly granted handle and refresh everything that depends on it. */
+async function adoptFolder(handle: FileSystemDirectoryHandle) {
+  libraryFolder = handle;
+  savedHandle = handle;
+  folderPermission = 'granted';
+  savedFolderName = handle.name;
+  rearmInstallButton();
+  hide(searchStatus);
+  refreshReadiness();
+  try {
+    await chrome.storage.local.set({ [OVERLAY_LIB_KEY]: handle.name });
+  } catch {
+    /* overlay just won't auto-reflect the folder */
+  }
+  if (runningInHelper) {
+    const closed = afterGrantInHelper(handle);
+    if (!closed && autoInstallLcsc && current) {
+      await onInstall();
+      await finishInstallHelper();
+    }
+  }
+}
+
+/** Open the finder in a normal browser tab, where the folder picker always works. */
+function openFinderInTab() {
+  const base = chrome.runtime.getURL('src/sidepanel/index.html');
+  const url = sourceTabId !== null ? `${base}?tab=${sourceTabId}` : base;
+  void chrome.tabs.create({ url }).catch(() => {
+    setStatus(searchStatus, 'Could not open a tab. Open the finder from the toolbar in a normal window.', 'error');
+  });
+}
+
+/**
+ * `pill`: one click re-allows a lapsed grant (the permission prompt is the
+ * first thing that runs, so it keeps the click's user gesture). `pick`: always
+ * open the folder picker. If the browser shows neither, offer a normal tab.
+ */
+async function onLibraryAction(mode: 'pill' | 'pick') {
   if (runningInOverlay) {
     if (pickFolderInFlight) return;
     pickFolderInFlight = true;
@@ -1070,37 +1134,48 @@ async function onLibraryAction() {
     return;
   }
 
-  try {
-    let handle: FileSystemDirectoryHandle | null = null;
-    // A lapsed grant only needs a click to re-grant (no folder browsing).
-    if (folderPermission === 'prompt') {
-      try {
-        handle = await getSavedFolder();
-      } catch {
-        handle = null;
-      }
+  // One click to re-allow the saved folder. No await may come before the
+  // permission request, or the click's gesture is spent and Chrome refuses.
+  if (mode === 'pill' && folderPermission === 'prompt' && savedHandle) {
+    const ok = await requestFolderPermission(savedHandle);
+    if (ok) {
+      await adoptFolder(savedHandle);
+      return;
     }
-    if (!handle) handle = await pickLibraryFolder();
-    libraryFolder = handle;
-    folderPermission = 'granted';
-    savedFolderName = handle.name;
-    rearmInstallButton();
+    // No prompt appeared, or it was declined. Give the guaranteed path.
+    setupPinned = true;
     refreshReadiness();
-    try {
-      await chrome.storage.local.set({ [OVERLAY_LIB_KEY]: handle.name });
-    } catch {
-      /* overlay just won't auto-reflect the folder */
-    }
-    if (runningInHelper) {
-      const closed = afterGrantInHelper(handle);
-      if (!closed && autoInstallLcsc && current) {
-        await onInstall();
-        await finishInstallHelper();
-      }
-    }
+    setStatus(
+      searchStatus,
+      `Chrome did not re-allow “${savedFolderName}”. Choose the folder again below.`,
+      'error',
+      '',
+      { label: 'Open in a tab', run: openFinderInTab },
+    );
+    chooseFolderBtn.focus();
+    return;
+  }
+
+  try {
+    const handle = await pickLibraryFolder();
+    await adoptFolder(handle);
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') return;
-    setStatus(searchStatus, err instanceof Error ? err.message : 'Could not open the folder.', 'error');
+    const msg = err instanceof Error ? err.message : '';
+    const noPicker =
+      (err instanceof DOMException && (err.name === 'SecurityError' || err.name === 'NotAllowedError')) ||
+      /gesture|not allowed|unavailable/i.test(msg);
+    if (noPicker) {
+      setStatus(
+        searchStatus,
+        'This window cannot open the folder picker. Open the finder in a normal tab and choose the folder there.',
+        'error',
+        msg,
+        { label: 'Open in a tab', run: openFinderInTab },
+      );
+      return;
+    }
+    setStatus(searchStatus, msg || 'Could not open the folder.', 'error');
   }
 }
 
