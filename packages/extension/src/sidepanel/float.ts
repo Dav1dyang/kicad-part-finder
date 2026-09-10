@@ -159,7 +159,11 @@ export async function floatOnTop(
   // Mirror lang + a base background so there's no white flash before styles load.
   try {
     pipWindow.document.documentElement.lang = sourceDoc.documentElement.lang || 'en';
-    pipWindow.document.documentElement.style.colorScheme = 'dark';
+    // Follow whatever theme the source document is showing.
+    const theme = sourceDoc.documentElement.getAttribute('data-theme');
+    if (theme) pipWindow.document.documentElement.setAttribute('data-theme', theme);
+    pipWindow.document.documentElement.style.colorScheme =
+      sourceDoc.defaultView?.getComputedStyle(sourceDoc.documentElement).colorScheme || 'dark light';
     pipWindow.document.body.style.margin = '0';
   } catch {
     /* non-fatal */

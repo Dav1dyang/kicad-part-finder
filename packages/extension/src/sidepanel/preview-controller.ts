@@ -114,25 +114,61 @@ export function createPreviewController(root: ParentNode = document) {
     }
   }
 
-  /** Show a preview kind: toggle tab/pane state and lazily render it. */
-  function activate(kind: PreviewKind): void {
-    if (!tabs.has(kind)) return;
-    active = kind;
+  /** Apply tab/pane visibility + ARIA + roving tabindex for the active kind. */
+  function paint(kind: PreviewKind, focusTab = false): void {
     for (const [k, { tab, pane }] of tabs) {
       const on = k === kind;
       tab.classList.toggle('is-active', on);
       tab.setAttribute('aria-selected', String(on));
+      tab.tabIndex = on ? 0 : -1;
       pane.classList.toggle('is-active', on);
       if (on) pane.removeAttribute('hidden');
       else pane.setAttribute('hidden', '');
+      if (on && focusTab) tab.focus();
     }
-    ensureRendered(kind);
   }
 
-  // Wire tab clicks once.
+  /**
+   * Pause the 3D loop unless its tab is showing and the document that owns the
+   * pane is visible. That document changes when the UI floats into a
+   * Picture-in-Picture window, so it is read from the pane, not `document`.
+   */
+  function syncPause(): void {
+    if (!handle3d) return;
+    const pane = tabs.get('3d')?.pane;
+    const hidden = pane ? pane.ownerDocument.hidden : document.hidden;
+    const visible = active === '3d' && !hidden;
+    if (visible) handle3d.resume();
+    else handle3d.pause();
+  }
+
+  /** Show a preview kind: toggle tab/pane state and lazily render it. */
+  function activate(kind: PreviewKind, focusTab = false): void {
+    if (!tabs.has(kind)) return;
+    active = kind;
+    paint(kind, focusTab);
+    ensureRendered(kind);
+    syncPause();
+  }
+
+  // Wire tab clicks once, plus Left/Right/Home/End on the tablist (WAI-ARIA
+  // tabs pattern: only the active tab is in the Tab order).
   for (const [kind, { tab }] of tabs) {
     tab.addEventListener('click', () => activate(kind));
+    tab.addEventListener('keydown', (e) => {
+      const i = KINDS.indexOf(kind);
+      let next: PreviewKind | null = null;
+      if (e.key === 'ArrowRight') next = KINDS[(i + 1) % KINDS.length];
+      else if (e.key === 'ArrowLeft') next = KINDS[(i - 1 + KINDS.length) % KINDS.length];
+      else if (e.key === 'Home') next = KINDS[0];
+      else if (e.key === 'End') next = KINDS[KINDS.length - 1];
+      if (next) {
+        e.preventDefault();
+        activate(next, true);
+      }
+    });
   }
+  document.addEventListener('visibilitychange', syncPause);
 
   return {
     /**
@@ -153,6 +189,9 @@ export function createPreviewController(root: ParentNode = document) {
     /** Programmatically switch tabs (also used by the click handlers). */
     activate,
 
+    /** Re-evaluate pause state (call after the UI moves between documents). */
+    refresh: syncPause,
+
     /** The currently-active preview kind. */
     get active(): PreviewKind {
       return active;
@@ -170,15 +209,8 @@ export function createPreviewController(root: ParentNode = document) {
       handle3d = null;
       for (const { pane } of tabs.values()) pane.textContent = '';
       // Reset tab visuals to the default without rendering anything.
-      for (const [k, { tab, pane }] of tabs) {
-        const on = k === 'symbol';
-        tab.classList.toggle('is-active', on);
-        tab.setAttribute('aria-selected', String(on));
-        pane.classList.toggle('is-active', on);
-        if (on) pane.removeAttribute('hidden');
-        else pane.setAttribute('hidden', '');
-      }
       active = 'symbol';
+      paint('symbol');
     },
   };
 }
