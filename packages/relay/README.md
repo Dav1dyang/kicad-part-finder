@@ -48,7 +48,7 @@ https://kicad-part-relay.<your-subdomain>.workers.dev
 ```
 
 **Copy that URL** and paste it into the extension's **Relay URL** field (in the
-side panel, near "Choose library folder"). The extension persists it in
+first-run view or in Settings), then click **Test**. The extension persists it in
 `chrome.storage.local` and routes all JLCPCB/EasyEDA traffic through it.
 
 > No bindings, secrets, or paid features are required — this is a free-tier
@@ -73,8 +73,9 @@ pnpm --filter @kicad-part-finder/relay typecheck
 
 ## Deploy on Vercel (alternative to Cloudflare Workers)
 
-The relay also runs as a Vercel Edge Function (`api/[...path].ts` reuses the same
-handler). From this folder:
+The relay also runs as a Vercel Edge Function: the files under `api/` delegate
+to the same Worker handler, which accepts paths with or without the `/api`
+prefix. From this folder:
 
 ```bash
 npx vercel deploy --prod    # first run links the project + logs you in

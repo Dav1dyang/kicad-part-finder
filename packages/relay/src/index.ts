@@ -249,9 +249,12 @@ export default {
     }
 
     const url = new URL(request.url);
+    // On Vercel the same handlers are mounted under `/api` (see api/*.ts), so
+    // accept both `/jlcpcb/search` and `/api/jlcpcb/search`.
+    const pathname = url.pathname.replace(/^\/api(?=\/|$)/, '') || '/';
 
     // Health check / root.
-    if (url.pathname === '/') {
+    if (pathname === '/') {
       return text('kicad-part-relay ok');
     }
 
@@ -261,7 +264,7 @@ export default {
     }
 
     try {
-      switch (url.pathname) {
+      switch (pathname) {
         case '/jlcpcb/search':
           return await handleJlcpcbSearch(url);
         case '/easyeda/component':
@@ -271,7 +274,7 @@ export default {
         case '/easyeda/model-obj':
           return await handleEasyedaModelObj(url);
         default:
-          return upstreamError(`not found: ${url.pathname}`, 404);
+          return upstreamError(`not found: ${pathname}`, 404);
       }
     } catch (err) {
       // Defensive catch-all — should be unreachable since each handler wraps its

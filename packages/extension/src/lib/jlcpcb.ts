@@ -26,6 +26,9 @@ export interface JlcMatch {
   lcscUrl: string;
 }
 
+/** How long one relay round-trip may take before it counts as failed. */
+export const RELAY_TIMEOUT_MS = 20_000;
+
 /** Trim a trailing slash so `${relayBase}/path` never doubles up. */
 function trimTrailingSlash(base: string): string {
   return base.replace(/\/+$/, '');
@@ -123,11 +126,15 @@ async function searchJlc(query: string, relayBase: string): Promise<JlcSearchOut
   let resp: Response;
   try {
     // GET the relay; the Worker does the real (server-side) JLCPCB POST and
-    // returns the body verbatim with permissive CORS.
-    resp = await fetch(endpoint);
+    // returns the body verbatim with permissive CORS. A hung relay must not
+    // leave the panel spinning forever, so every request has a deadline.
+    resp = await fetch(endpoint, { signal: AbortSignal.timeout(RELAY_TIMEOUT_MS) });
   } catch (err) {
     // Network-layer failure: relay unreachable / wrong URL / offline (surfaced
-    // as a generic "Failed to fetch").
+    // as a generic "Failed to fetch"), or the deadline above.
+    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      return { matches: [], diagnostic: 'timed out' };
+    }
     const reason = err instanceof Error ? err.message : String(err);
     return { matches: [], diagnostic: `fetch threw: ${reason}` };
   }
@@ -192,8 +199,11 @@ async function searchJlc(query: string, relayBase: string): Promise<JlcSearchOut
     })
     .filter((m) => m.mpn && m.lcscId);
 
-  // Most-in-stock first so the auto-selected candidate is the orderable one.
-  matches.sort((a, b) => b.stock - a.stock);
+  // Exact MPN hits first (so "TPS2116DRLR" doesn't land on a higher-stock
+  // sibling), then most-in-stock so the auto-selected candidate is orderable.
+  const wanted = query.trim().toLowerCase();
+  const exact = (m: JlcMatch) => (m.mpn.toLowerCase() === wanted ? 1 : 0);
+  matches.sort((a, b) => exact(b) - exact(a) || b.stock - a.stock);
   return { matches, diagnostic: `http ${resp.status}, ${matches.length} results` };
 }
 

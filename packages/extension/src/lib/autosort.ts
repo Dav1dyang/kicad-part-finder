@@ -56,6 +56,16 @@ const RULES: ReadonlyArray<readonly [keyword: string, bucket: Bucket]> = [
   ['pmic', 'Power'],
   ['power', 'Power'],
 
+  // --- IC families that contain a Light/Connector keyword (checked first) ---
+  ['led driver', 'IC'],
+  ['display driver', 'IC'],
+  ['usb interface', 'IC'],
+  ['usb converter', 'IC'],
+  ['interface ic', 'IC'],
+  ['driver ic', 'IC'],
+  ['gate driver', 'IC'],
+  ['motor driver', 'IC'],
+
   // --- Light / optoelectronics ---
   ['optoelectronic', 'Light'],
   ['opto', 'Light'],

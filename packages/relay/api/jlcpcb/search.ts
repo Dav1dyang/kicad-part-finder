@@ -1,3 +1,4 @@
-import { handleJlcpcbSearch } from '../../src/index';
+import worker from '../../src/index';
 export const config = { runtime: 'edge' };
-export default function handler(req: Request): Promise<Response> { return handleJlcpcbSearch(new URL(req.url)); }
+// Delegate to the Worker entry so OPTIONS preflight and method handling stay in one place.
+export default function handler(req: Request): Promise<Response> { return worker.fetch(req, undefined); }
