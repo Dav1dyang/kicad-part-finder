@@ -76,7 +76,11 @@
         <div class="setup-step-main">
           <div class="setup-step-title">KiCad library folder <span class="flag flag-quiet">needed to install</span></div>
           <p class="hint">Pick your library root, for example <code>kicad-libraries</code>. Parts are written inside it. KiCad's global tables are never touched.</p>
-          <button id="chooseFolderBtn" class="btn btn-ghost btn-sm" type="button">Choose library folder…</button>
+          <div class="btn-row">
+            <button id="chooseFolderBtn" class="btn btn-ghost btn-sm" type="button">Choose library folder…</button>
+            <button id="chooseInTabBtn" class="link-btn hidden" type="button">Choose in a tab instead</button>
+          </div>
+          <p id="grantModeNote" class="hint hidden">Choose the folder here. The floating window picks it up on its own. You can close this tab afterwards.</p>
         </div>
       </div>
 

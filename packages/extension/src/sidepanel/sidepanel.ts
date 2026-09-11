@@ -89,6 +89,8 @@ const setupView = $('setupView');
 const setupStepLib = $('setupStepLib');
 const setupStepRelay = $('setupStepRelay');
 const chooseFolderBtn = $<HTMLButtonElement>('chooseFolderBtn');
+const chooseInTabBtn = $<HTMLButtonElement>('chooseInTabBtn');
+const grantModeNote = $('grantModeNote');
 const relayUrlInputSetup = $<HTMLInputElement>('relayUrlInputSetup');
 const relayTestBtnSetup = $<HTMLButtonElement>('relayTestBtnSetup');
 const relayNoteSetup = $('relayNoteSetup');
@@ -186,6 +188,10 @@ const autoInstallLcsc = parseInstallLcsc(location.search);
 /** The page this finder belongs to (tab/window mode). Re-aimed by RETARGET. */
 let sourceTabId = parseSourceTabId(location.search);
 const runningInHelper = runningInSetup || autoInstallLcsc !== null;
+/** A normal tab opened from the floating window just to choose the folder (`?grant=1`). */
+const runningInGrantTab = new URLSearchParams(location.search).get('grant') === '1';
+/** How long a folder dialog may stay silent before we offer the tab route. */
+const PICKER_SILENCE_MS = 2500;
 
 const OVERLAY_LIB_KEY = 'overlayLibraryName';
 let overlayLibraryName = '';
@@ -225,6 +231,14 @@ async function init() {
   // shows no permission prompt.
   libPill.addEventListener('click', () => void onLibraryAction('pill'));
   chooseFolderBtn.addEventListener('click', () => void onLibraryAction('pick'));
+  chooseInTabBtn.addEventListener('click', openFinderInTab);
+  // Arc's floating popup window does not show native folder dialogs, so in
+  // window mode the tab route is offered up front, not only after a failure.
+  if (runningInWindow && !runningInHelper) show(chooseInTabBtn);
+  if (runningInGrantTab) {
+    setupPinned = true;
+    show(grantModeNote);
+  }
   relayPill.addEventListener('click', () => {
     if (!hasRelay()) openSetupFocusRelay();
     else toggleSettings();
@@ -420,10 +434,18 @@ function onRuntimeMessage(message: any, sender: chrome.runtime.MessageSender): v
   }
 
   if (!runningInOverlay) {
-    // A folder granted in another finder document (a helper tab, say): pick
-    // up whatever state Chrome will give this document without a prompt.
-    if (message.type === 'OVERLAY_FOLDER_READY') {
-      void refreshFolderState().then(refreshReadiness);
+    // A folder granted in another finder document (a tab, say): pick up
+    // whatever state Chrome will give this document without a prompt.
+    if (message.type === 'OVERLAY_FOLDER_READY' || message.type === 'FOLDER_GRANTED') {
+      void refreshFolderState().then(() => {
+        refreshReadiness();
+        if (folderPermission === 'granted') {
+          rearmInstallButton();
+          setStatus(searchStatus, `“${folderName()}” is connected.`, 'success');
+        } else if (folderPermission === 'prompt') {
+          setStatus(searchStatus, `“${savedFolderName}” was chosen. Click the Library pill once to use it here.`, 'info');
+        }
+      });
     }
     return;
   }
@@ -1094,6 +1116,19 @@ async function adoptFolder(handle: FileSystemDirectoryHandle) {
   } catch {
     /* overlay just won't auto-reflect the folder */
   }
+  // Tell every other finder document (the floating window, say) so it can
+  // re-check the handle: Chrome shares the grant across pages of one origin
+  // while any of them stays open.
+  try {
+    await chrome.runtime.sendMessage({ type: 'FOLDER_GRANTED', name: handle.name });
+  } catch {
+    /* no other finder document is open */
+  }
+  if (runningInGrantTab) {
+    setupPinned = false;
+    refreshReadiness();
+    setStatus(searchStatus, `“${handle.name}” granted. Go back to the floating window; you can close this tab.`, 'success');
+  }
   if (runningInHelper) {
     const closed = afterGrantInHelper(handle);
     if (!closed && autoInstallLcsc && current) {
@@ -1106,7 +1141,7 @@ async function adoptFolder(handle: FileSystemDirectoryHandle) {
 /** Open the finder in a normal browser tab, where the folder picker always works. */
 function openFinderInTab() {
   const base = chrome.runtime.getURL('src/sidepanel/index.html');
-  const url = sourceTabId !== null ? `${base}?tab=${sourceTabId}` : base;
+  const url = `${base}?grant=1${sourceTabId !== null ? `&tab=${sourceTabId}` : ''}`;
   void chrome.tabs.create({ url }).catch(() => {
     setStatus(searchStatus, 'Could not open a tab. Open the finder from the toolbar in a normal window.', 'error');
   });
@@ -1137,7 +1172,19 @@ async function onLibraryAction(mode: 'pill' | 'pick') {
   // One click to re-allow the saved folder. No await may come before the
   // permission request, or the click's gesture is spent and Chrome refuses.
   if (mode === 'pill' && folderPermission === 'prompt' && savedHandle) {
+    // If no permission bubble appears (Arc's popup window), say so instead of
+    // looking dead. The request itself is still allowed to finish later.
+    const silent = setTimeout(() => {
+      setStatus(
+        searchStatus,
+        'No permission prompt? This window may not show one. Choose the folder in a tab instead.',
+        'info',
+        '',
+        { label: 'Open in a tab', run: openFinderInTab },
+      );
+    }, PICKER_SILENCE_MS);
     const ok = await requestFolderPermission(savedHandle);
+    clearTimeout(silent);
     if (ok) {
       await adoptFolder(savedHandle);
       return;
@@ -1156,11 +1203,25 @@ async function onLibraryAction(mode: 'pill' | 'pick') {
     return;
   }
 
+  const silent = setTimeout(() => {
+    setStatus(
+      searchStatus,
+      'No folder dialog? This window may not show one. Choose the folder in a tab instead.',
+      'info',
+      '',
+      { label: 'Open in a tab', run: openFinderInTab },
+    );
+  }, PICKER_SILENCE_MS);
   try {
     const handle = await pickLibraryFolder();
+    clearTimeout(silent);
     await adoptFolder(handle);
   } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') return;
+    clearTimeout(silent);
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      hide(searchStatus);
+      return;
+    }
     const msg = err instanceof Error ? err.message : '';
     const noPicker =
       (err instanceof DOMException && (err.name === 'SecurityError' || err.name === 'NotAllowedError')) ||
