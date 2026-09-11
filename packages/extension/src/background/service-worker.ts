@@ -19,7 +19,14 @@
  *                delegated to short-lived helper windows opened here.
  *
  * Browser-level commands (manifest `commands`): open-finder, search-selection,
- * install-current. Chrome owns their bindings; see src/lib/shortcuts.ts.
+ * install-current. Chrome owns their bindings; see src/lib/shortcuts.ts. Arc
+ * and Dia never deliver them, so the page listener (content/page-listener.js)
+ * forwards the same actions as `PAGE_COMMAND`; both paths meet in one handler
+ * and a short dedupe window absorbs a browser that delivers both.
+ *
+ * `open-finder` toggles: it closes the finder when it is already open and in
+ * front (side panel in this window, the floating window focused, the finder
+ * tab active), otherwise it opens or focuses it.
  */
 
 import type { DetectedPart } from '@kicad-part-finder/shared';
@@ -39,6 +46,19 @@ const HELPER_CLOSE_GRACE_MS = 1800;
 
 /** Badge colour for "a part was detected on this page". */
 const BADGE_COLOR = '#22c55e';
+
+/** The content script that turns highlights into searches and listens for page shortcuts. */
+const PAGE_LISTENER_FILE = 'content/page-listener.js';
+
+/** Registration id for the page listener on all sites (once the user allows them). */
+const PAGE_LISTENER_SCRIPT_ID = 'page-listener-all-sites';
+
+/** Origins the "allow on all sites" grant covers. */
+const ALL_SITES_ORIGINS = ['https://*/*', 'http://*/*'];
+
+/** A browser command and its page-shortcut twin can both arrive; drop the echo. */
+const COMMAND_DEDUPE_MS = 500;
+
 
 // --- Session state (survives worker restarts) ---------------------------------
 
@@ -61,8 +81,8 @@ interface SessionState {
   setupHelperWindowId: number | null;
   /** True while an install helper is being created or is running. */
   installHelperBusy: boolean;
-  /** Tabs where the selection listener was injected. */
-  selectionTabs: number[];
+  /** Tabs where we injected the page listener (highlight-to-search + page shortcuts). */
+  listenerTabs: number[];
   /** Whether chrome.sidePanel actually works (Arc exposes it but doesn't implement it). */
   sidePanelSupported: boolean | null;
 }
@@ -74,7 +94,7 @@ const DEFAULT_SESSION: SessionState = {
   helperWindows: {},
   setupHelperWindowId: null,
   installHelperBusy: false,
-  selectionTabs: [],
+  listenerTabs: [],
   sidePanelSupported: null,
 };
 
@@ -235,6 +255,42 @@ function broadcast(message: Record<string, unknown>): void {
   });
 }
 
+// --- Open side panels --------------------------------------------------------
+
+/**
+ * Window ids that currently show our side panel, straight from Chrome. No
+ * bookkeeping to keep alive across worker restarts, and nothing that keeps
+ * the worker awake.
+ */
+async function sidePanelWindowIds(): Promise<Set<number>> {
+  const ids = new Set<number>();
+  try {
+    const contexts = await chrome.runtime.getContexts({ contextTypes: [chrome.runtime.ContextType.SIDE_PANEL] });
+    for (const ctx of contexts) if (typeof ctx.windowId === 'number' && ctx.windowId >= 0) ids.add(ctx.windowId);
+  } catch {
+    /* API missing: treat every panel as closed, so the toggle only ever opens */
+  }
+  return ids;
+}
+
+// --- Command dedupe ----------------------------------------------------------
+
+const lastCommandAt = new Map<string, number>();
+
+/**
+ * Chrome consumes a bound command before the page sees the key, but a browser
+ * that delivers both the command and the page listener's keydown would toggle
+ * twice. Record the moment synchronously (before any await) and drop a repeat
+ * inside the window.
+ */
+function acceptCommand(name: string): boolean {
+  const now = Date.now();
+  const last = lastCommandAt.get(name) ?? 0;
+  if (now - last < COMMAND_DEDUPE_MS) return false;
+  lastCommandAt.set(name, now);
+  return true;
+}
+
 // --- Message routing ----------------------------------------------------------
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -263,8 +319,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const tabId = typeof message.tabId === 'number' ? message.tabId : await activeTabId();
       const part = tabId === null ? null : await getDetectedPart(tabId);
       sendResponse({ part, tabId });
+      // Then make sure the page can talk back (highlights, page shortcuts) and
+      // tell the finder whether it can, so it can explain when it cannot. Not
+      // awaited before the reply: the prefill must not wait for an injection.
+      if (tabId !== null) broadcast({ type: 'SELECTION_READY', tabId, ready: await ensurePageListener(tabId) });
     })();
     return true;
+  }
+
+  // The finder asks for the page listener on its tab (after "allow all sites").
+  if (message.type === 'ENSURE_PAGE_LISTENER') {
+    void (async () => {
+      const tabId = typeof message.tabId === 'number' ? message.tabId : await activeTabId();
+      sendResponse({ ready: tabId === null ? false : await ensurePageListener(tabId) });
+    })();
+    return true;
+  }
+
+  // A page shortcut (or the finder's own copy of one) — same actions as the
+  // browser commands. `sender.tab` is the page for content scripts and the
+  // finder's own tab for tab/window documents; a side panel has none.
+  if (message.type === 'PAGE_COMMAND' && typeof message.name === 'string') {
+    const name = message.name as string;
+    if (!acceptCommand(name)) return false;
+    void (async () => {
+      let tab = sender.tab;
+      if (!tab && typeof message.windowId === 'number') {
+        // A side-panel document: act on the active tab of its window.
+        try {
+          [tab] = await chrome.tabs.query({ active: true, windowId: message.windowId });
+        } catch {
+          tab = undefined;
+        }
+      }
+      if (name === 'open-finder') await openFinder(tab, true);
+      else if (name === 'search-selection') {
+        await searchSelection(tab, typeof message.text === 'string' ? message.text : undefined);
+      } else if (name === 'install-current') await installCurrent(tab);
+    })();
+    return false;
   }
 
   // Fetch + convert an LCSC part through the relay.
@@ -380,13 +473,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // --- Opening the finder -------------------------------------------------------
 
 /**
- * Open the finder for a tab in the user's chosen mode, then (re-)inject the
- * selection listener on that tab so highlight-to-search works.
+ * Open the finder for a tab in the user's chosen mode, then make sure the page
+ * listener is on that tab so highlight-to-search and page shortcuts work.
+ *
+ * With `toggle`, an already-open finder that is in front is closed instead:
+ * the side panel of this window, the floating window while it is focused
+ * (it is minimised, not closed, so its folder grant survives), or the finder
+ * tab while it is the active tab.
  *
  * `chrome.sidePanel.open()` needs the user gesture that triggered us, so in
  * auto mode it is called before any other await when the caches are warm.
  */
-async function openFinder(tab?: chrome.tabs.Tab): Promise<void> {
+async function openFinder(tab: chrome.tabs.Tab | undefined, toggle: boolean): Promise<void> {
   let tabId = tab?.id;
   if (typeof tabId !== 'number') tabId = (await activeTabId()) ?? undefined;
   if (typeof tabId !== 'number') return;
@@ -394,61 +492,125 @@ async function openFinder(tab?: chrome.tabs.Tab): Promise<void> {
   const openMode = openModeCache ?? (await getOpenMode());
 
   if (openMode === 'overlay') {
-    // Restricted pages (chrome://, the Web Store, PDFs) refuse injection —
-    // fall back to a window so the icon never dead-ends.
+    // The overlay script toggles itself on re-injection. Restricted pages
+    // (chrome://, the Web Store, PDFs) refuse injection — fall back to a
+    // window so the icon never dead-ends.
     const injected = await injectOverlay(tabId);
     if (!injected) await openFinderWindow(tabId);
   } else if (openMode === 'window') {
+    if (toggle && (await hideFinderWindowIfFocused())) return;
     await openFinderWindow(tabId);
   } else {
     const supported =
       sidePanelSupportedCache !== null ? sidePanelSupportedCache : await isSidePanelSupported();
     if (supported) {
+      const windowId = tab?.windowId;
+      if (toggle && typeof windowId === 'number' && (await sidePanelWindowIds()).has(windowId)) {
+        await closeSidePanel(windowId);
+        return;
+      }
       try {
         await chrome.sidePanel.open({ tabId });
       } catch {
         await openFinderTab(tabId);
       }
     } else {
+      if (toggle && (await closeFinderTabIfActive(tabId))) return;
       await openFinderTab(tabId);
     }
   }
 
-  if (await isSelectionSearchEnabled()) await injectSelectionListener(tabId);
+  const ready = await ensurePageListener(tabId);
+  broadcast({ type: 'SELECTION_READY', tabId, ready });
+}
+
+/** Minimise the floating window when it is the focused window. */
+async function hideFinderWindowIfFocused(): Promise<boolean> {
+  const s = await getSession();
+  if (s.finderWindowId === null) return false;
+  try {
+    const win = await chrome.windows.get(s.finderWindowId);
+    if (!win.focused || win.state === 'minimized') return false;
+    await chrome.windows.update(s.finderWindowId, { state: 'minimized' });
+    return true;
+  } catch {
+    return false; // gone — the caller opens a new one
+  }
+}
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Close the side panel in a window. Chrome has no close() call. The panel
+ * document closes itself on request; if it is still there a beat later,
+ * disabling the panel closes it, and re-enabling lets the next open work.
+ * That disable is global (per-tab options would turn the panel tab-scoped
+ * for that tab from then on), so it is only used while this is the one
+ * window showing the panel.
+ */
+async function closeSidePanel(windowId: number): Promise<void> {
+  broadcast({ type: 'CLOSE_SIDE_PANEL', windowId });
+  await delay(300);
+  const open = await sidePanelWindowIds();
+  if (!open.has(windowId) || open.size > 1) return;
+  try {
+    await chrome.sidePanel.setOptions({ path: SIDEPANEL_PATH, enabled: false });
+    await delay(200);
+  } catch {
+    /* nothing more we can do */
+  } finally {
+    chrome.sidePanel.setOptions({ path: SIDEPANEL_PATH, enabled: true }).catch(() => {});
+  }
+}
+
+/** Close the finder tab when the command was pressed while it was the active tab. */
+async function closeFinderTabIfActive(activeId: number): Promise<boolean> {
+  const s = await getSession();
+  if (s.finderTabId === null || s.finderTabId !== activeId) return false;
+  try {
+    await chrome.tabs.remove(activeId);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 chrome.action.onClicked.addListener((tab) => {
-  void openFinder(tab);
+  void openFinder(tab, true);
 });
 
 chrome.commands.onCommand.addListener((command, tab) => {
-  if (command === 'open-finder') void openFinder(tab);
+  if (!acceptCommand(command)) return;
+  if (command === 'open-finder') void openFinder(tab, true);
   else if (command === 'search-selection') void searchSelection(tab);
   else if (command === 'install-current') void installCurrent(tab);
 });
 
 /**
- * "Search highlighted text" command: read the selection from the active tab
- * (the command grants activeTab, so this works on any page), record it as the
+ * "Search highlighted text": read the selection from the active tab (the
+ * command grants activeTab, so this works on any page), record it as the
  * tab's detected part, then open the finder — which pre-fills and searches it.
+ * The page listener passes the selection along, so no script needs injecting.
  */
-async function searchSelection(tab?: chrome.tabs.Tab): Promise<void> {
+async function searchSelection(tab?: chrome.tabs.Tab, selectedText?: string): Promise<void> {
   let tabId = tab?.id;
   if (typeof tabId !== 'number') tabId = (await activeTabId()) ?? undefined;
   if (typeof tabId !== 'number') return;
 
   // Open the finder FIRST so chrome.sidePanel.open() still holds the command's
   // user gesture; read the selection in parallel and hand it over when ready.
-  const opening = openFinder(tab);
-  let text = '';
-  try {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: () => (window.getSelection()?.toString() ?? '').trim(),
-    });
-    text = String(results?.[0]?.result ?? '').trim();
-  } catch {
-    /* restricted page — nothing to read */
+  const opening = openFinder(tab, false);
+  let text = (selectedText ?? '').trim();
+  if (!selectedText) {
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => (window.getSelection()?.toString() ?? '').trim(),
+      });
+      text = String(results?.[0]?.result ?? '').trim();
+    } catch {
+      /* restricted page — nothing to read */
+    }
   }
 
   if (text && text.length <= 80 && !text.includes('\n')) {
@@ -547,7 +709,7 @@ async function openFinderWindow(sourceTabId: number): Promise<void> {
 
   if (s.finderWindowId !== null) {
     try {
-      await chrome.windows.update(s.finderWindowId, { focused: true });
+      await focusWindow(s.finderWindowId);
       const [view] = await chrome.tabs.query({ windowId: s.finderWindowId });
       // Same as the tab path: keep the document (and its folder grant) alive.
       if (typeof view?.id === 'number' && !(await retargetFinder(view.id, sourceTabId))) {
@@ -572,11 +734,25 @@ async function openFinderWindow(sourceTabId: number): Promise<void> {
   }
 }
 
+/** Bring a window to the front, restoring it only if the toggle minimised it. Throws if it is gone. */
+async function focusWindow(windowId: number): Promise<void> {
+  const win = await chrome.windows.get(windowId);
+  if (win.state === 'minimized') {
+    try {
+      await chrome.windows.update(windowId, { state: 'normal' });
+    } catch {
+      /* some browsers refuse `state` on popups; focusing still restores on most */
+    }
+  }
+  await chrome.windows.update(windowId, { focused: true });
+}
+
 /**
  * Tell an already-open finder document (identified by its own tab id) which
  * source tab it now belongs to, along with that tab's detected part. Returns
  * false when no document answered (still loading, or navigated away), in
- * which case the caller reloads it the old way.
+ * which case the caller reloads it the old way. Whether the page listener is
+ * on the new tab follows separately (SELECTION_READY from openFinder).
  */
 async function retargetFinder(finderTabId: number, sourceTabId: number): Promise<boolean> {
   try {
@@ -591,21 +767,75 @@ async function retargetFinder(finderTabId: number, sourceTabId: number): Promise
 // --- Content-script injection -------------------------------------------------
 
 /**
- * Inject the selection listener into a tab. Injection is only possible where
- * we have host access: DigiKey/LCSC by manifest, the page the user opened the
- * finder on via activeTab, or everywhere once the user granted the optional
- * all-sites permission from Settings. Failures are silent by design.
+ * Put the page listener on a tab. Injection is only possible where we have
+ * host access: DigiKey/LCSC by manifest, the page the user opened the finder
+ * on via activeTab, or everywhere once the user granted the optional all-sites
+ * permission from Settings. The script guards against re-injection itself, so
+ * calling this on a tab that already has it is harmless. Returns whether the
+ * tab has the listener afterwards; failures are silent by design.
  */
-async function injectSelectionListener(tabId: number): Promise<void> {
+async function injectPageListener(tabId: number): Promise<boolean> {
   try {
-    await chrome.scripting.executeScript({ target: { tabId }, files: ['content/selection-listener.js'] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: [PAGE_LISTENER_FILE] });
     await updateSession((s) => {
-      if (!s.selectionTabs.includes(tabId)) s.selectionTabs.push(tabId);
+      if (!s.listenerTabs.includes(tabId)) s.listenerTabs.push(tabId);
     });
+    return true;
   } catch {
-    /* restricted page or no host access — highlight-to-search is unavailable here */
+    // Restricted page or no host access — highlight-to-search is unavailable here.
+    await updateSession((s) => {
+      s.listenerTabs = s.listenerTabs.filter((id) => id !== tabId);
+    });
+    return false;
   }
 }
+
+/** Inject the page listener unless this worker already did so for the tab. */
+async function ensurePageListener(tabId: number): Promise<boolean> {
+  const s = await getSession();
+  if (s.listenerTabs.includes(tabId)) return true;
+  return injectPageListener(tabId);
+}
+
+/**
+ * Register (or drop) the page listener as a persistent content script for all
+ * sites, mirroring the optional host permission. Registered scripts survive
+ * browser restarts, so this only has to run when the grant changes and at
+ * install time.
+ */
+async function syncAllSitesListener(): Promise<void> {
+  try {
+    const granted = await chrome.permissions.contains({ origins: ALL_SITES_ORIGINS });
+    const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [PAGE_LISTENER_SCRIPT_ID] });
+    if (granted && existing.length === 0) {
+      await chrome.scripting.registerContentScripts([
+        {
+          id: PAGE_LISTENER_SCRIPT_ID,
+          js: [PAGE_LISTENER_FILE],
+          matches: ALL_SITES_ORIGINS,
+          runAt: 'document_idle',
+          persistAcrossSessions: true,
+        },
+      ]);
+    } else if (!granted && existing.length > 0) {
+      await chrome.scripting.unregisterContentScripts({ ids: [PAGE_LISTENER_SCRIPT_ID] });
+    }
+  } catch (err) {
+    console.warn('Could not sync the all-sites page listener:', err);
+  }
+}
+
+chrome.runtime.onInstalled.addListener(() => void syncAllSitesListener());
+chrome.runtime.onStartup.addListener(() => void syncAllSitesListener());
+chrome.permissions.onAdded.addListener(() => {
+  void (async () => {
+    await syncAllSitesListener();
+    // Pages already open got no registered script; cover the one in front.
+    const tabId = await activeTabId();
+    if (tabId !== null) broadcast({ type: 'SELECTION_READY', tabId, ready: await injectPageListener(tabId) });
+  })();
+});
+chrome.permissions.onRemoved.addListener(() => void syncAllSitesListener());
 
 /** Inject (or toggle) the in-page overlay. Returns false on restricted pages. */
 async function injectOverlay(tabId: number): Promise<boolean> {
@@ -716,7 +946,7 @@ async function closeHelperWindow(windowId: number): Promise<void> {
 chrome.tabs.onRemoved.addListener((tabId) => {
   void updateSession((s) => {
     delete s.detectedParts[String(tabId)];
-    s.selectionTabs = s.selectionTabs.filter((id) => id !== tabId);
+    s.listenerTabs = s.listenerTabs.filter((id) => id !== tabId);
     if (s.finderTabId === tabId) s.finderTabId = null;
   });
 });
@@ -756,8 +986,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
       if (changeInfo.status === 'loading' && s.detectedParts[String(tabId)]) {
         await setDetectedPart(tabId, null);
       }
-      if (changeInfo.status === 'complete' && s.selectionTabs.includes(tabId)) {
-        if (await isSelectionSearchEnabled()) await injectSelectionListener(tabId);
+      if (changeInfo.status === 'complete' && s.listenerTabs.includes(tabId)) {
+        // Same-origin navigations keep activeTab; put the listener back.
+        broadcast({ type: 'SELECTION_READY', tabId, ready: await injectPageListener(tabId) });
       }
       if (tabId === s.finderTabId && typeof changeInfo.url === 'string') {
         if (!changeInfo.url.startsWith(chrome.runtime.getURL(SIDEPANEL_PATH))) {
@@ -770,10 +1001,13 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 });
 
 // Tell open finder documents which tab is now active so a side panel can offer
-// that tab's detected part instead of showing a stale one.
+// that tab's detected part instead of showing a stale one. While a side panel
+// is open in that window, also put the page listener on the new tab (where we
+// may: all-sites grant, DigiKey/LCSC) so highlight-to-search follows the user.
 chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
   void (async () => {
     const part = await getDetectedPart(tabId);
-    broadcast({ type: 'TAB_ACTIVATED', tabId, windowId, part });
+    const selectionReady = (await sidePanelWindowIds()).has(windowId) ? await ensurePageListener(tabId) : undefined;
+    broadcast({ type: 'TAB_ACTIVATED', tabId, windowId, part, selectionReady });
   })();
 });

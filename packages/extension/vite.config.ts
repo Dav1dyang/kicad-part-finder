@@ -10,7 +10,7 @@ export default defineConfig(({ mode }) => ({
       input: {
         'content/digikey': resolve(__dirname, 'src/content/digikey.ts'),
         'content/lcsc': resolve(__dirname, 'src/content/lcsc.ts'),
-        'content/selection-listener': resolve(__dirname, 'src/content/selection-listener.ts'),
+        'content/page-listener': resolve(__dirname, 'src/content/page-listener.ts'),
         // In-page overlay content script (injected via executeScript). Must be a
         // SELF-CONTAINED classic script: its only helper (overlay-bounds.ts) is
         // imported by NO other entry, so rollup inlines it here instead of
@@ -39,14 +39,15 @@ export default defineConfig(({ mode }) => ({
   },
   plugins: [
     {
-      name: 'iife-wrap-overlay-content',
-      // content/overlay.js is re-injected via executeScript; rollup emits its
-      // inlined helper consts (OVERLAY_MIN_WIDTH, etc.) and the static markup/CSS
-      // at top level, which redeclare on the 2nd injection ("Identifier already
-      // declared"). Wrap the whole chunk in an IIFE so every binding is function-
-      // scoped; re-running just re-enters the __kicadOverlayActive guard (toggle).
+      name: 'iife-wrap-content-scripts',
+      // content/overlay.js and content/page-listener.js are re-injected via
+      // executeScript; rollup emits their inlined helper consts (OVERLAY_MIN_WIDTH,
+      // PAGE_SHORTCUT_DEFAULTS, etc.) at top level, which redeclare on the 2nd
+      // injection ("Identifier already declared"). Wrap the whole chunk in an IIFE
+      // so every binding is function-scoped; re-running just re-enters the
+      // __kicad*Active guard (a toggle for the overlay, a no-op for the listener).
       renderChunk(code, chunk) {
-        if (chunk.fileName === 'content/overlay.js') {
+        if (chunk.fileName === 'content/overlay.js' || chunk.fileName === 'content/page-listener.js') {
           // Prepend the IIFE opener on the SAME first line (no leading newline)
           // and append the closer AFTER the existing code so every original line
           // keeps its line number — the generated sourcemap then still aligns.

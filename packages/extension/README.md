@@ -4,7 +4,7 @@ Manifest V3 Chrome extension that finds EasyEDA/LCSC parts and installs KiCad sy
 
 ## How it fits together
 
-- **Content scripts** detect parts. `digikey.ts` reads the page's JSON-LD; `lcsc.ts` reads the C-number from the URL and follows client-side navigation. `selection-listener.ts` turns highlighted text into a search while the finder is open.
+- **Content scripts** detect parts. `digikey.ts` reads the page's JSON-LD; `lcsc.ts` reads the C-number from the URL and follows client-side navigation. `page-listener.ts` turns highlighted text into a search and forwards page shortcuts; it runs on DigiKey and LCSC from the manifest, on the tab the finder was opened on through `activeTab`, and on every site as a registered content script once the user allows all sites.
 - **The service worker** routes messages, opens the finder in the chosen mode, runs the three browser commands, and opens helper windows for the overlay. It keeps every piece of state in `chrome.storage.session` so nothing is lost when Chrome stops the idle worker.
 - **The UI document** (`src/sidepanel/`) is the same page in every mode. It searches and converts through the relay, previews the symbol, footprint, and 3D model, then writes files with the File System Access API.
 - **The relay** (`packages/relay`) does the real JLCPCB and EasyEDA fetches. Both sites block browser requests. The relay URL is stored in `chrome.storage.local` under `relayUrl` and passed to every network helper as `relayBase`.
@@ -29,7 +29,9 @@ The UI reads its situation from the URL:
 
 ## Keyboard shortcuts
 
-Browser commands are declared in `manifest.json`. Chrome owns their bindings. The Settings panel reads them with `chrome.commands.getAll()` and links to `chrome://extensions/shortcuts`.
+Browser commands are declared in `manifest.json`. Chrome owns their bindings. The Settings panel reads them with `chrome.commands.getAll()` and links to `chrome://extensions/shortcuts`. `open-finder` toggles: the worker closes the finder when it is already in front.
+
+Page shortcuts mirror the three commands for browsers that never deliver them (Arc, Dia). `page-listener.ts` matches them on the page with its own small parser (`page-combo.ts`, kept identical to the main module by a test) and sends `PAGE_COMMAND`; the finder document forwards them too, since the page never sees keys pressed inside the finder. Bindings live in `chrome.storage.sync` under `pageShortcuts`.
 
 Panel shortcuts are handled in `src/lib/shortcuts.ts` (pure, tested) and dispatched from `sidepanel.ts`. Bindings are stored in `chrome.storage.sync` under `panelShortcuts` as canonical strings such as `Mod+Enter`. `Mod` is Command on macOS and Ctrl elsewhere.
 

@@ -147,9 +147,11 @@
           <span>Keyboard shortcuts</span>
           <button id="resetShortcutsBtn" class="link-btn" type="button">Reset all</button>
         </div>
-        <p class="hint">Browser shortcuts work on any page. Chrome manages them, so changing one opens Chrome's shortcut page.</p>
+        <p class="hint">Browser shortcuts work on any page and even when the finder is closed. Chrome manages them, so changing one opens Chrome's shortcut page. Arc and Dia ignore them.</p>
         <div id="browserShortcuts" class="shortcut-list" role="list"></div>
-        <p class="hint">Panel shortcuts work while the finder is focused. Click a key to change it. Press Escape to cancel or Backspace to remove it.</p>
+        <p class="hint">Page shortcuts do the same jobs, but Part Finder listens for them itself. They work on DigiKey, LCSC, the page where you opened the finder, and everywhere once you allow all sites above. Click a key to change it. Press Escape to cancel or Backspace to remove it.</p>
+        <div id="pageShortcuts" class="shortcut-list" role="list"></div>
+        <p class="hint">Panel shortcuts work while the finder is focused.</p>
         <div id="panelShortcuts" class="shortcut-list" role="list"></div>
       </div>
     </section>
@@ -164,6 +166,11 @@
         <button id="searchBtn" class="search-go" type="button">Search</button>
       </div>
       <div id="searchHint" class="search-hint hidden"></div>
+      <!-- Shown when highlighting on the page cannot reach the finder. -->
+      <div id="selectionHint" class="selection-hint hidden" role="status">
+        <span id="selectionHintText"></span>
+        <button id="selectionAllowBtn" class="link-btn" type="button">allow all sites</button>
+      </div>
       <!-- A part detected on the page while you were busy with another: offered, not forced. -->
       <div id="detectedOffer" class="offer hidden" role="status">
         <span class="offer-text">Detected <b id="detectedOfferMpn" class="mono"></b> on this page</span>

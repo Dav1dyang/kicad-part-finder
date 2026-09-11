@@ -72,6 +72,8 @@ Both settings live on this computer only. Panel shortcuts sync across your Chrom
 
 **On any other page** highlight a part number. The panel searches it after a short pause. You can turn this off in Settings and use the **Search highlighted text** shortcut instead.
 
+Highlighting works on DigiKey, LCSC, and the page where you opened the finder. To make it work on every page, click **Allow on all sites** in Settings (or in the note under the search box). If highlighting cannot reach the finder on the current page, the note under the search box says so.
+
 **Typing** works too. Enter an LCSC number like `C3235557` or a manufacturer part number like `TPS2116DRLR`.
 
 When a part number matches several LCSC parts you get a list with stock, price, and package. Pick one. The card then shows:
@@ -99,17 +101,21 @@ The overlay runs inside a frame, which Chrome does not allow to write files. So 
 
 ## Keyboard shortcuts
 
-There are two kinds.
+There are three kinds.
 
 **Browser shortcuts** work on any page, even when the panel is closed. Chrome manages them, so the extension can only show the current binding. To change one, open Settings and click **Change in Chrome**, or go to `chrome://extensions/shortcuts` directly (`edge://extensions/shortcuts` on Edge, `brave://extensions/shortcuts` on Brave).
 
 | Action | Default |
 |--------|---------|
-| Open Part Finder | Cmd+Shift+K / Ctrl+Shift+K |
+| Open or close Part Finder | Cmd+Shift+K / Ctrl+Shift+K |
 | Search highlighted text | Cmd+Shift+L / Ctrl+Shift+L |
 | Install the current part | Alt+Shift+I |
 
 Chrome silently drops a default that another extension already uses. The Settings list shows **Not set** when that happens.
+
+**Page shortcuts** do the same three jobs, but Part Finder listens for them itself on the page. They exist because Arc and Dia never pass extension shortcuts through. They use the same defaults, work wherever highlight-to-search works (DigiKey, LCSC, the page where you opened the finder, and everywhere once you allow all sites), and can be changed in Settings like panel shortcuts. Every page shortcut needs a modifier key so it cannot fire while you type.
+
+**Open or close** means what it says: the shortcut closes the finder when it is already in front. The side panel closes, the finder tab closes, and the floating window is minimized rather than closed so its folder connection survives. Press the shortcut again to bring it back.
 
 **Panel shortcuts** work while the panel is focused. You can change them in Settings: click a key, press the new combination, done. Press Escape to cancel or Backspace to unbind. They are stored in your Chrome profile and sync across machines.
 
@@ -141,6 +147,12 @@ The relay is up but JLCPCB refused it, usually a temporary block. Wait a minute,
 **The Library pill says "Reconnect folder"**
 Chrome forgets folder grants whenever the panel's page is reloaded, for example after a browser restart. Click the pill once to re-allow it. The floating window keeps its grant as long as it stays open.
 
+**The shortcut does nothing (Arc, Dia)**
+Arc and Dia do not deliver extension shortcuts, even when they show them in their settings. Use the page shortcuts instead: they have the same defaults and work on any page Part Finder is allowed on. Click **Allow on all sites** in Settings once so they work everywhere. They cannot open the finder from a page it is not allowed on, such as a new tab page; click the toolbar icon there.
+
+**Highlighting text does nothing**
+The note under the search box tells you when the current page cannot reach the finder. Either open Part Finder from the toolbar icon on that page, or click **Allow on all sites** once. Chrome never allows extensions on its own pages (`chrome://`, the Web Store) or on PDFs.
+
 **No folder dialog appears (Arc floating window)**
 Arc's floating popup window does not show native folder dialogs or permission prompts. Click **Choose in a tab instead** (or **Open in a tab** in the message that appears). A normal tab opens, the dialog works there, and the floating window picks up the folder by itself. You can close the tab afterwards.
 
@@ -165,7 +177,7 @@ Use the **Floating window** open mode rather than the Float button. Arc drops al
 
 ```bash
 pnpm install
-pnpm test               # unit tests for the extension, relay, and legacy server
+pnpm test               # unit tests for the extension and the relay
 pnpm dev:extension      # rebuild on change
 pnpm build:extension    # production build to packages/extension/dist
 pnpm --filter @kicad-part-finder/extension exec tsc --noEmit   # typecheck
@@ -176,8 +188,6 @@ packages/
   extension/   Chrome extension (Manifest V3, Vite, vitest)
   relay/       Cloudflare Worker + Vercel edge function
   shared/      Types shared across packages
-  server/      Legacy companion server. Not used by the extension anymore.
-scripts/       Legacy install/uninstall scripts for the server. Not needed.
 ```
 
 See [packages/extension/README.md](packages/extension/README.md) for the extension's internals and [CLAUDE.md](CLAUDE.md) for the conventions contributors and AI tools should follow.

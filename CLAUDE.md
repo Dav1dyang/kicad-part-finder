@@ -2,14 +2,15 @@
 
 Chrome extension (Manifest V3) that detects electronic parts on DigiKey and LCSC, searches JLCPCB and EasyEDA through a user-deployed relay, and writes KiCad symbols, footprints, and STEP models into the user's library folder with the File System Access API.
 
-**There is no companion server.** `packages/server` is legacy and unused by the extension. Do not route conversion or library writes through it.
+**There is no companion server.** The old `packages/server` was removed; conversion and library writes happen in the browser. Do not reintroduce a local server for them.
 
 ## Architecture
 
 ```
 packages/extension          Chrome extension (Vite build, vitest tests)
   src/background/           Service worker: message routing, open modes, commands, helper windows
-  src/content/              digikey.ts, lcsc.ts (detection), selection-listener.ts, overlay.ts (in-page panel)
+  src/content/              digikey.ts, lcsc.ts (detection), page-listener.ts (highlights + page shortcuts),
+                            overlay.ts (in-page panel)
   src/sidepanel/            The UI document. Runs in the side panel, a tab, a popup window,
                             the overlay iframe, and short-lived helper windows.
   src/lib/                  converter/ (EasyEDA -> KiCad), jlcpcb.ts, library-writer.ts (FS Access),
@@ -45,17 +46,21 @@ Helper windows report back with `OVERLAY_HELPER_DONE`; the service worker rebroa
 | `selectionSearch` | `chrome.storage.local` | Whether highlighting text searches automatically (default on) |
 | `theme` | `chrome.storage.local` | `system`, `dark`, or `light` |
 | `panelShortcuts` | `chrome.storage.sync` | Customized panel shortcuts (`action -> "Mod+Enter"` strings) |
+| `pageShortcuts` | `chrome.storage.sync` | Customized page shortcuts, the browser commands' twins (`open-finder -> "Mod+Shift+k"`) |
 | `libraryFolder` | IndexedDB `kicad-part-finder/handles` | The `FileSystemDirectoryHandle` |
 | finder tab/window ids, detected parts | `chrome.storage.session` | Survive service-worker restarts |
 
 ## Rules that keep it working
 
 - **Service worker state must survive termination.** Chrome kills an idle MV3 worker after about 30 seconds. Anything that has to outlive a request goes in `chrome.storage.session`, never a module-level variable.
-- **Content scripts are IIFE-wrapped** and guard against re-injection with a `window.__kicad*` flag. `content/overlay.js` must stay self-contained; its helpers are imported by no other entry so rollup inlines them.
+- **Content scripts are IIFE-wrapped** and guard against re-injection with a `window.__kicad*` flag. `content/overlay.js` and `content/page-listener.js` must stay self-contained classic scripts; their helpers (`overlay-bounds.ts`, `page-combo.ts`) are imported by no other entry so rollup inlines them, and the `iife-wrap-content-scripts` Vite plugin wraps both so re-injection cannot redeclare top-level consts. Never import `src/lib/shortcuts.ts` from a content script.
+- **Alt combos read the physical key.** macOS composes a glyph for Option+letter (`ˆ` for Option+Shift+I), so `comboFromKeys` and the page listener take a letter or digit from `KeyboardEvent.code` whenever Alt is held.
+- **The page listener runs wherever we may run.** DigiKey and LCSC pages get it from the manifest, the tab the finder was opened on gets it through `activeTab`, and every site gets a registered content script once the user grants the optional all-sites permission. The service worker reports `selectionReady` to the finder so it can say when a page cannot reach it.
 - **The relay is required for search, convert, previews, and the STEP download.** The folder is required only at install time. Gate the UI accordingly.
 - **Never use `innerHTML` with data from the network.** Part names come from JLCPCB and EasyEDA; render with `textContent`.
 - **Library writes are append-and-dedupe.** `mergeSymbolLibrary` skips a symbol whose name already exists. Footprints are overwritten by name. The symbol's `Footprint` field is qualified as `DavidLib_<Bucket>:<name>` so KiCad links them automatically.
-- **Browser-level shortcuts cannot be set by the extension.** `chrome.commands.getAll()` reads them; changing one means sending the user to `chrome://extensions/shortcuts`. Panel shortcuts are ours and live in `src/lib/shortcuts.ts`.
+- **Browser-level shortcuts cannot be set by the extension.** `chrome.commands.getAll()` reads them; changing one means sending the user to `chrome://extensions/shortcuts`. Arc and Dia never deliver them, so the page listener forwards the same three actions as `PAGE_COMMAND`; the worker dedupes a command and its page twin within 500 ms. Panel and page shortcuts are ours and live in `src/lib/shortcuts.ts`.
+- **`open-finder` is a toggle.** The worker finds open side panels with `chrome.runtime.getContexts` (no bookkeeping, nothing keeping the worker awake); closing asks the panel document to `window.close()`, then falls back to a global `sidePanel.setOptions({ enabled: false })` and re-enable, only while one window shows the panel (per-tab options would make the panel tab-scoped). The floating window is minimized, not closed, so its folder grant survives.
 - **Pure logic goes in its own module with tests.** Everything under `src/lib` and the `preview-*`, `overlay-bounds`, `overlay-params`, `source-tab` modules is DOM-free and unit-tested. Keep it that way when adding features.
 
 ## Chrome extension guidance

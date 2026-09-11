@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "KiCad Part Finder",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Find and install KiCad symbols, footprints, and 3D models from DigiKey and LCSC",
   "permissions": [
     "activeTab",
@@ -35,7 +35,8 @@
         "https://www.digikey.ca/*/products/detail/*"
       ],
       "js": [
-        "content/digikey.js"
+        "content/digikey.js",
+        "content/page-listener.js"
       ],
       "run_at": "document_idle"
     },
@@ -45,7 +46,8 @@
         "https://lcsc.com/product-detail/*"
       ],
       "js": [
-        "content/lcsc.js"
+        "content/lcsc.js",
+        "content/page-listener.js"
       ],
       "run_at": "document_idle"
     }
