@@ -13,6 +13,14 @@
  *     bindings live in chrome.storage.sync under `panelShortcuts` and the user
  *     re-records them from the Settings panel.
  *
+ *  3. PAGE shortcuts — the same three actions as the browser commands, but
+ *     listened for by our own content script on pages it runs on. They exist
+ *     because some Chromium browsers (Arc, Dia) never deliver `chrome.commands`
+ *     to extensions. Bindings live in chrome.storage.sync under `pageShortcuts`.
+ *     The content script cannot import this module (a shared chunk would break
+ *     a classic content script), so it carries a tiny parser of its own in
+ *     `src/content/page-combo.ts`; a test keeps the two default tables equal.
+ *
  * This module knows nothing about the DOM or chrome.* APIs so it can be unit-
  * tested directly. A combo is stored as a canonical string, e.g. `"Mod+Enter"`,
  * `"Shift+/"`, `"1"`, `"Escape"`. `Mod` means ⌘ on macOS and Ctrl elsewhere,
@@ -53,6 +61,26 @@ export const DEFAULT_PANEL_SHORTCUTS: Readonly<Record<PanelAction, string>> = {
   dismiss: 'Escape',
 };
 
+/** The browser commands (manifest `commands`), mirrored as page shortcuts. */
+export const PAGE_ACTIONS = ['open-finder', 'search-selection', 'install-current'] as const;
+export type PageAction = (typeof PAGE_ACTIONS)[number];
+
+export const PAGE_ACTION_LABELS: Record<PageAction, string> = {
+  'open-finder': 'Open or close Part Finder',
+  'search-selection': 'Search the highlighted text',
+  'install-current': 'Install the part shown in Part Finder',
+};
+
+/**
+ * Factory defaults, identical to the manifest's `suggested_key`s so a page
+ * shortcut and its browser command never disagree out of the box.
+ */
+export const DEFAULT_PAGE_SHORTCUTS: Readonly<Record<PageAction, string>> = {
+  'open-finder': 'Mod+Shift+k',
+  'search-selection': 'Mod+Shift+l',
+  'install-current': 'Alt+Shift+i',
+};
+
 /** A parsed key combination. `mod` is the platform primary modifier (⌘ / Ctrl). */
 export interface KeyCombo {
   key: string;
@@ -84,12 +112,25 @@ export function normalizeKey(key: string): string {
 }
 
 /**
+ * The letter or digit a physical key produces on a US layout, from
+ * `KeyboardEvent.code` (`KeyI` → `i`, `Digit3` → `3`), or null for any other key.
+ */
+export function keyFromCode(code: string | undefined | null): string | null {
+  const m = /^(?:Key([A-Z])|Digit(\d))$/.exec(code ?? '');
+  if (!m) return null;
+  return (m[1] ?? m[2]).toLowerCase();
+}
+
+/**
  * Build a combo from the raw fields of a keydown event. Returns null for a
  * lone modifier press (the user is still holding keys) so a recorder can wait
  * for the real key.
+ *
+ * With Alt (Option) held, macOS reports the composed glyph in `key`
+ * (Option+Shift+I is `ˆ`), so a letter or digit is read from `code` instead.
  */
 export function comboFromKeys(
-  input: { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean },
+  input: { key: string; code?: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean },
   platform: Platform,
 ): KeyCombo | null {
   if (!input.key || MODIFIER_KEYS.has(input.key) || input.key === 'Unidentified') return null;
@@ -97,7 +138,8 @@ export function comboFromKeys(
   // On macOS a bare Control key is a distinct (rarely used) modifier; on other
   // platforms Meta (the Windows key) is reserved for the OS and is ignored.
   const ctrl = platform === 'mac' ? input.ctrlKey : false;
-  return { key: normalizeKey(input.key), mod, alt: input.altKey, shift: input.shiftKey, ctrl };
+  const key = (input.altKey ? keyFromCode(input.code) : null) ?? normalizeKey(input.key);
+  return { key, mod, alt: input.altKey, shift: input.shiftKey, ctrl };
 }
 
 /** Canonical string form, e.g. `Mod+Shift+k`, `Escape`, `Ctrl+Alt+1`. */
@@ -225,32 +267,77 @@ export interface ComboValidation {
   reason?: string;
 }
 
-/**
- * Decide whether a combo may be assigned to `action`, given the other current
- * bindings. Rules: no browser-reserved combos; `install` writes files so it
- * must carry a modifier; a bare single letter or digit is allowed (the
- * dispatcher ignores it while typing in a field); no duplicates.
- */
-export function validateCombo(
+type AnyBindings = Readonly<Partial<Record<string, string | null>>>;
+
+/** The action in `bindings` (other than `except`) already bound to `canonical`, if any. */
+function findClash(canonical: string, actions: readonly string[], bindings: AnyBindings, except: string | null): string | null {
+  for (const other of actions) {
+    if (other === except) continue;
+    const existing = parseCombo(bindings[other]);
+    if (existing && serializeCombo(existing) === canonical) return other;
+  }
+  return null;
+}
+
+function validateAgainst(
   text: string,
-  action: PanelAction,
-  bindings: Readonly<Partial<Record<PanelAction, string | null>>>,
+  needsModifier: boolean,
+  own: { action: string; actions: readonly string[]; labels: Readonly<Record<string, string>>; bindings: AnyBindings },
+  other: { actions: readonly string[]; labels: Readonly<Record<string, string>>; bindings: AnyBindings; kind: string },
 ): ComboValidation {
   const combo = parseCombo(text);
   if (!combo) return { ok: false, reason: 'Press a key, optionally with modifiers.' };
   const canonical = serializeCombo(combo);
   if (RESERVED.has(canonical)) return { ok: false, reason: 'The browser uses that shortcut.' };
-  if (action === 'install' && !combo.mod && !combo.alt && !combo.ctrl) {
-    return { ok: false, reason: 'Install needs a modifier key (⌘ / Ctrl / Alt) so it cannot fire by accident.' };
+  if (needsModifier && !combo.mod && !combo.alt && !combo.ctrl) {
+    return { ok: false, reason: 'Needs a modifier key (⌘ / Ctrl / Alt) so it cannot fire by accident.' };
   }
-  for (const other of PANEL_ACTIONS) {
-    if (other === action) continue;
-    const existing = bindings[other];
-    if (existing && parseCombo(existing) && serializeCombo(parseCombo(existing)!) === canonical) {
-      return { ok: false, reason: `Already used by “${PANEL_ACTION_LABELS[other]}”.` };
-    }
-  }
+  const clash = findClash(canonical, own.actions, own.bindings, own.action);
+  if (clash) return { ok: false, reason: `Already used by “${own.labels[clash]}”.` };
+  // Panel and page shortcuts are both live inside the finder, where the panel
+  // table wins; a combo in both would silently shadow the page one there.
+  const cross = findClash(canonical, other.actions, other.bindings, null);
+  if (cross) return { ok: false, reason: `Already used by the ${other.kind} shortcut “${other.labels[cross]}”.` };
   return { ok: true };
+}
+
+/**
+ * Decide whether a combo may be assigned to a panel `action`, given the other
+ * current bindings. Rules: no browser-reserved combos; `install` writes files
+ * so it must carry a modifier; a bare single letter or digit is allowed (the
+ * dispatcher ignores it while typing in a field); no duplicates, in this table
+ * or the page table.
+ */
+export function validateCombo(
+  text: string,
+  action: PanelAction,
+  bindings: Readonly<Partial<Record<PanelAction, string | null>>>,
+  pageBindings: Readonly<Partial<Record<PageAction, string | null>>> = {},
+): ComboValidation {
+  return validateAgainst(
+    text,
+    action === 'install',
+    { action, actions: PANEL_ACTIONS, labels: PANEL_ACTION_LABELS, bindings },
+    { actions: PAGE_ACTIONS, labels: PAGE_ACTION_LABELS, bindings: pageBindings, kind: 'page' },
+  );
+}
+
+/**
+ * Page shortcuts fire while the user is on an ordinary web page, so every one
+ * of them must carry a modifier: a bare letter would hijack typing everywhere.
+ */
+export function validatePageCombo(
+  text: string,
+  action: PageAction,
+  bindings: Readonly<Partial<Record<PageAction, string | null>>>,
+  panelBindings: Readonly<Partial<Record<PanelAction, string | null>>> = {},
+): ComboValidation {
+  return validateAgainst(
+    text,
+    true,
+    { action, actions: PAGE_ACTIONS, labels: PAGE_ACTION_LABELS, bindings },
+    { actions: PANEL_ACTIONS, labels: PANEL_ACTION_LABELS, bindings: panelBindings, kind: 'panel' },
+  );
 }
 
 /** Whether a stored binding table matches a keydown. */
@@ -275,20 +362,31 @@ export function comboIsBareKey(combo: KeyCombo): boolean {
   return !combo.mod && !combo.alt && !combo.ctrl && combo.key !== 'Escape';
 }
 
-/** Merge a stored (possibly partial / stale) table over the defaults. */
-export function resolvePanelShortcuts(
+function resolveTable<A extends string>(
+  actions: readonly A[],
+  defaults: Readonly<Record<A, string>>,
   stored: unknown,
-): Record<PanelAction, string | null> {
-  const out = { ...DEFAULT_PANEL_SHORTCUTS } as Record<PanelAction, string | null>;
+): Record<A, string | null> {
+  const out = { ...defaults } as Record<A, string | null>;
   if (!stored || typeof stored !== 'object') return out;
   const table = stored as Record<string, unknown>;
-  for (const action of PANEL_ACTIONS) {
+  for (const action of actions) {
     if (!(action in table)) continue;
     const value = table[action];
     if (value === null) out[action] = null; // explicitly unbound
     else if (typeof value === 'string' && parseCombo(value)) out[action] = serializeCombo(parseCombo(value)!);
   }
   return out;
+}
+
+/** Merge a stored (possibly partial / stale) panel table over the defaults. */
+export function resolvePanelShortcuts(stored: unknown): Record<PanelAction, string | null> {
+  return resolveTable(PANEL_ACTIONS, DEFAULT_PANEL_SHORTCUTS, stored);
+}
+
+/** Merge a stored (possibly partial / stale) page table over the defaults. */
+export function resolvePageShortcuts(stored: unknown): Record<PageAction, string | null> {
+  return resolveTable(PAGE_ACTIONS, DEFAULT_PAGE_SHORTCUTS, stored);
 }
 
 /** Find the action a pressed combo triggers, if any. */
@@ -298,6 +396,18 @@ export function actionForCombo(
 ): PanelAction | null {
   if (!pressed) return null;
   for (const action of PANEL_ACTIONS) {
+    if (comboMatches(bindings[action], pressed)) return action;
+  }
+  return null;
+}
+
+/** Find the page action a pressed combo triggers, if any. */
+export function pageActionForCombo(
+  bindings: Readonly<Record<PageAction, string | null>>,
+  pressed: KeyCombo | null,
+): PageAction | null {
+  if (!pressed) return null;
+  for (const action of PAGE_ACTIONS) {
     if (comboMatches(bindings[action], pressed)) return action;
   }
   return null;

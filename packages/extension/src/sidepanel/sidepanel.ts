@@ -19,8 +19,13 @@
  * windows through the service worker.
  *
  * Keyboard shortcuts: browser-level commands are read from chrome.commands and
- * changed on chrome://extensions/shortcuts; panel shortcuts are ours (see
- * ../lib/shortcuts.ts) and are recorded in Settings.
+ * changed on chrome://extensions/shortcuts; panel shortcuts and page shortcuts
+ * are ours (see ../lib/shortcuts.ts) and are recorded in Settings. Page
+ * shortcuts are matched by the page listener on web pages and, for the
+ * finder's own documents, here as well (forwarded as PAGE_COMMAND).
+ *
+ * The open-finder toggle may ask a side-panel document to close itself
+ * (CLOSE_SIDE_PANEL); the worker finds open panels with runtime.getContexts.
  */
 
 import type { DetectedPart } from '@kicad-part-finder/shared';
@@ -41,7 +46,11 @@ import {
   PANEL_ACTIONS,
   PANEL_ACTION_LABELS,
   DEFAULT_PANEL_SHORTCUTS,
+  PAGE_ACTIONS,
+  PAGE_ACTION_LABELS,
+  DEFAULT_PAGE_SHORTCUTS,
   actionForCombo,
+  pageActionForCombo,
   browserShortcutToKeyCaps,
   comboFromKeys,
   comboIsBareKey,
@@ -49,8 +58,11 @@ import {
   detectPlatform,
   parseCombo,
   resolvePanelShortcuts,
+  resolvePageShortcuts,
   serializeCombo,
   validateCombo,
+  validatePageCombo,
+  type PageAction,
   type PanelAction,
   type Platform,
 } from '../lib/shortcuts.js';
@@ -77,6 +89,7 @@ const selectionSearchToggle = $<HTMLInputElement>('selectionSearchToggle');
 const allSitesRow = $('allSitesRow');
 const allSitesBtn = $<HTMLButtonElement>('allSitesBtn');
 const browserShortcutsEl = $('browserShortcuts');
+const pageShortcutsEl = $('pageShortcuts');
 const panelShortcutsEl = $('panelShortcuts');
 const resetShortcutsBtn = $<HTMLButtonElement>('resetShortcutsBtn');
 
@@ -104,6 +117,9 @@ const searchInput = $<HTMLInputElement>('searchInput');
 const searchField = document.querySelector('.search-field') as HTMLElement;
 const searchBtn = $<HTMLButtonElement>('searchBtn');
 const searchHint = $('searchHint');
+const selectionHint = $('selectionHint');
+const selectionHintText = $('selectionHintText');
+const selectionAllowBtn = $<HTMLButtonElement>('selectionAllowBtn');
 const searchStatus = $('searchStatus');
 const detectedOffer = $('detectedOffer');
 const detectedOfferMpn = $('detectedOfferMpn');
@@ -172,12 +188,22 @@ let myWindowId: number | null = null;
 /** Tab/window mode: the id of the tab this finder page itself lives in. */
 let myOwnTabId: number | null = null;
 let selectionSearch = true;
+/**
+ * Whether the page this finder belongs to has the page listener (so highlights
+ * and page shortcuts reach us). null until the worker has told us.
+ */
+let selectionReady: boolean | null = null;
+/** True once the user has typed in the search box since it was last set by us. */
+let searchDirty = false;
 let panelShortcuts = resolvePanelShortcuts(undefined);
+let pageShortcuts = resolvePageShortcuts(undefined);
 const platform: Platform = detectPlatform(
   (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform || navigator.platform,
 );
 /** The action currently being recorded in Settings, if any. */
-let recordingAction: PanelAction | null = null;
+let recordingAction: PanelAction | PageAction | null = null;
+/** Which table the recording belongs to. */
+let recordingGroup: 'panel' | 'page' = 'panel';
 /** The document the key handler is bound to (changes when floating in PiP). */
 let keyDocument: Document = document;
 
@@ -192,6 +218,8 @@ const runningInHelper = runningInSetup || autoInstallLcsc !== null;
 const runningInGrantTab = new URLSearchParams(location.search).get('grant') === '1';
 /** How long a folder dialog may stay silent before we offer the tab route. */
 const PICKER_SILENCE_MS = 2500;
+/** The plain side panel: no source tab, not a window, not framed, not a helper. */
+const runningInSidePanel = sourceTabId === null && !runningInWindow && !runningInOverlay && !runningInHelper && !runningInGrantTab;
 
 const OVERLAY_LIB_KEY = 'overlayLibraryName';
 let overlayLibraryName = '';
@@ -274,9 +302,13 @@ async function init() {
   });
   selectionSearchToggle.addEventListener('change', () => void onSelectionSearchChange());
   allSitesBtn.addEventListener('click', () => void requestAllSites());
-  resetShortcutsBtn.addEventListener('click', () => void resetPanelShortcuts());
+  resetShortcutsBtn.addEventListener('click', () => void resetAllShortcuts());
 
   // Search.
+  searchInput.addEventListener('input', () => {
+    searchDirty = true;
+  });
+  selectionAllowBtn.addEventListener('click', () => void allowAllSitesForThisPage());
   searchBtn.addEventListener('click', () => void runSearch(searchInput.value));
   searchInput.addEventListener('keydown', (e) => {
     // Ignore the Enter that commits an IME composition (Chinese/Japanese input).
@@ -289,7 +321,7 @@ async function init() {
     if (!offeredPart) return;
     const text = offeredPart.lcscId || offeredPart.mpn;
     hideOffer();
-    searchInput.value = text;
+    setSearchValue(text);
     void runSearch(text);
   });
   detectedOfferDismiss.addEventListener('click', hideOffer);
@@ -322,12 +354,17 @@ async function init() {
   relayUrlInputSetup.value = relayUrl;
   selectionSearchToggle.checked = selectionSearch;
   void refreshAllSitesRow();
-  await loadPanelShortcuts();
+  await loadShortcuts();
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'sync' && changes.panelShortcuts) {
+    if (area !== 'sync') return;
+    if (changes.panelShortcuts) {
       panelShortcuts = resolvePanelShortcuts(changes.panelShortcuts.newValue);
       renderPanelShortcuts();
       renderKeyHints();
+    }
+    if (changes.pageShortcuts) {
+      pageShortcuts = resolvePageShortcuts(changes.pageShortcuts.newValue);
+      renderPageShortcuts();
     }
   });
 
@@ -369,7 +406,7 @@ async function init() {
       if (typeof resp?.tabId === 'number') myActiveTabId = resp.tabId;
       const part = resp?.part as DetectedPart | undefined;
       if (part && (part.source !== 'selection' || selectionSearch || part.autoSearch)) {
-        searchInput.value = part.lcscId || part.mpn || '';
+        setSearchValue(part.lcscId || part.mpn || '');
         if (part.autoSearch) void runSearch(searchInput.value);
       }
     } catch {
@@ -419,7 +456,21 @@ function onRuntimeMessage(message: any, sender: chrome.runtime.MessageSender): v
     if (sourceTabId !== null || runningInHelper || runningInOverlay) return;
     if (myWindowId !== null && message.windowId !== myWindowId) return;
     myActiveTabId = typeof message.tabId === 'number' ? message.tabId : myActiveTabId;
+    if (typeof message.selectionReady === 'boolean') setSelectionReady(message.selectionReady);
     if (message.part) offerOrSearch(message.part as DetectedPart, false);
+    return;
+  }
+
+  // The worker (re)injected the page listener on a tab, or could not.
+  if (message.type === 'SELECTION_READY') {
+    if (runningInHelper || !concernsMe(message.tabId)) return;
+    if (typeof message.ready === 'boolean') setSelectionReady(message.ready);
+    return;
+  }
+
+  // The open-finder toggle closed the side panel but this document survived.
+  if (message.type === 'CLOSE_SIDE_PANEL') {
+    if (runningInSidePanel && message.windowId === myWindowId) window.close();
     return;
   }
 
@@ -480,7 +531,9 @@ function onRuntimeMessage(message: any, sender: chrome.runtime.MessageSender): v
 function offerOrSearch(part: DetectedPart, force: boolean): void {
   const text = part.lcscId || part.mpn || '';
   if (!text) return;
-  const typing = document.activeElement === searchInput && searchInput.value.trim() !== '';
+  // "Typing" means the user actually edited the box, not merely that it holds
+  // focus: a floating window keeps focus on the box while the page is used.
+  const typing = searchDirty && searchInput.value.trim() !== '';
   const busy = installInFlight || searchInFlight;
   const cardShowing = !partCard.classList.contains('hidden');
   const sameAsCurrent = current && (current.meta.lcsc === text || current.meta.mpn === text);
@@ -494,7 +547,7 @@ function offerOrSearch(part: DetectedPart, force: boolean): void {
   }
   if (sameAsCurrent) return;
   hideOffer();
-  searchInput.value = text;
+  setSearchValue(text);
   if (detectDebounce) clearTimeout(detectDebounce);
   detectDebounce = setTimeout(() => {
     detectDebounce = null;
@@ -506,6 +559,67 @@ function offerOrSearch(part: DetectedPart, force: boolean): void {
 function hideOffer(): void {
   offeredPart = null;
   hide(detectedOffer);
+}
+
+/** Set the search box from code (a detection, a chip, a reset): not the user typing. */
+function setSearchValue(text: string): void {
+  searchInput.value = text;
+  searchDirty = false;
+}
+
+// --- Highlight-to-search availability -----------------------------------------
+
+function setSelectionReady(ready: boolean): void {
+  selectionReady = ready;
+  void refreshSelectionHint();
+}
+
+/**
+ * Explain, under the search box, when highlighting on the page cannot reach us:
+ * the page has no listener (no host access) or is one Chrome never lets us into.
+ */
+async function refreshSelectionHint(): Promise<void> {
+  const relevant = selectionSearch && selectionReady === false && !runningInHelper && !runningInGrantTab;
+  if (!relevant) {
+    hide(selectionHint);
+    return;
+  }
+  let allSites = false;
+  try {
+    allSites = await chrome.permissions.contains({ origins: ['https://*/*'] });
+  } catch {
+    allSites = false;
+  }
+  setText(
+    selectionHintText,
+    allSites
+      ? 'Highlight-to-search is not available on this page.'
+      : 'Highlight-to-search is off on this page. Open Part Finder from the toolbar icon there, or',
+  );
+  selectionAllowBtn.classList.toggle('hidden', allSites);
+  show(selectionHint);
+}
+
+/** "Allow on all sites" from the hint: grant, then put the listener on this page now. */
+async function allowAllSitesForThisPage(): Promise<void> {
+  let granted = false;
+  try {
+    granted = await chrome.permissions.request({ origins: ['https://*/*', 'http://*/*'] });
+  } catch {
+    granted = false;
+  }
+  void refreshAllSitesRow();
+  if (!granted) {
+    setStatus(searchStatus, 'Not allowed. Highlight-to-search keeps working on the page where you open the finder.', 'info');
+    return;
+  }
+  const tabId = sourceTabId ?? myActiveTabId;
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: 'ENSURE_PAGE_LISTENER', tabId: tabId ?? undefined });
+    if (typeof resp?.ready === 'boolean') setSelectionReady(resp.ready);
+  } catch {
+    /* the worker will tell us when it can */
+  }
 }
 
 // --- Overlay delegation ---------------------------------------------------------
@@ -754,6 +868,7 @@ async function onSelectionSearchChange() {
     /* keep for this session */
   }
   void refreshAllSitesRow();
+  void refreshSelectionHint();
 }
 
 /** Show the "allow on all sites" nudge only while the toggle is on and the grant is missing. */
@@ -782,14 +897,17 @@ async function requestAllSites() {
 
 // --- Keyboard shortcuts ------------------------------------------------------------
 
-async function loadPanelShortcuts() {
+async function loadShortcuts() {
   try {
-    const stored = await chrome.storage.sync.get('panelShortcuts');
+    const stored = await chrome.storage.sync.get(['panelShortcuts', 'pageShortcuts']);
     panelShortcuts = resolvePanelShortcuts(stored.panelShortcuts);
+    pageShortcuts = resolvePageShortcuts(stored.pageShortcuts);
   } catch {
     panelShortcuts = resolvePanelShortcuts(undefined);
+    pageShortcuts = resolvePageShortcuts(undefined);
   }
   renderPanelShortcuts();
+  renderPageShortcuts();
   renderKeyHints();
 }
 
@@ -803,10 +921,20 @@ async function savePanelShortcuts() {
   renderKeyHints();
 }
 
-async function resetPanelShortcuts() {
+async function savePageShortcuts() {
+  try {
+    await chrome.storage.sync.set({ pageShortcuts });
+  } catch {
+    /* keep for this session */
+  }
+  renderPageShortcuts();
+}
+
+async function resetAllShortcuts() {
   cancelRecording();
   panelShortcuts = resolvePanelShortcuts(undefined);
-  await savePanelShortcuts();
+  pageShortcuts = resolvePageShortcuts(undefined);
+  await Promise.all([savePanelShortcuts(), savePageShortcuts()]);
 }
 
 /** Render key caps into a container. */
@@ -855,7 +983,7 @@ async function renderBrowserShortcuts() {
     keys.className = 'keys';
     const caps = browserShortcutToKeyCaps(cmd.shortcut);
     renderCaps(keys, caps, 'Not set');
-    if (!caps.length) desc.textContent = 'Not set. Another extension may use the default.';
+    if (!caps.length) desc.textContent = 'Not set in the browser. The page shortcut below still works.';
     const change = document.createElement('button');
     change.type = 'button';
     change.className = 'link-btn';
@@ -881,10 +1009,18 @@ function browserShortcutsUrl(): string {
   return 'chrome://extensions/shortcuts';
 }
 
-/** The panel shortcuts, with a recorder per row. */
-function renderPanelShortcuts() {
-  panelShortcutsEl.textContent = '';
-  for (const action of PANEL_ACTIONS) {
+/** One recorder list: a row per action with the current keys and a Reset link. */
+function renderRecorderList<A extends PanelAction | PageAction>(
+  container: HTMLElement,
+  group: 'panel' | 'page',
+  actions: readonly A[],
+  labels: Readonly<Record<A, string>>,
+  defaults: Readonly<Record<A, string>>,
+  table: Readonly<Record<A, string | null>>,
+  onReset: (action: A) => void,
+) {
+  container.textContent = '';
+  for (const action of actions) {
     const row = document.createElement('div');
     row.className = 'shortcut-row';
     row.setAttribute('role', 'listitem');
@@ -892,32 +1028,45 @@ function renderPanelShortcuts() {
 
     const name = document.createElement('div');
     name.className = 'shortcut-name';
-    name.textContent = PANEL_ACTION_LABELS[action];
+    name.textContent = labels[action];
 
     const keysBtn = document.createElement('button');
     keysBtn.type = 'button';
     keysBtn.className = 'keys-btn';
-    keysBtn.setAttribute('aria-label', `Change shortcut for: ${PANEL_ACTION_LABELS[action]}`);
-    const combo = parseCombo(panelShortcuts[action]);
+    keysBtn.setAttribute('aria-label', `Change shortcut for: ${labels[action]}`);
+    const combo = parseCombo(table[action]);
     renderCaps(keysBtn, combo ? comboToKeyCaps(combo, platform) : [], 'Not set');
-    keysBtn.addEventListener('click', () => startRecording(action, keysBtn));
+    keysBtn.addEventListener('click', () => startRecording(group, action, keysBtn));
 
     row.appendChild(name);
     row.appendChild(keysBtn);
 
-    if (panelShortcuts[action] !== DEFAULT_PANEL_SHORTCUTS[action]) {
+    if (table[action] !== defaults[action]) {
       const reset = document.createElement('button');
       reset.type = 'button';
       reset.className = 'link-btn quiet';
       reset.textContent = 'Reset';
-      reset.addEventListener('click', () => {
-        panelShortcuts[action] = DEFAULT_PANEL_SHORTCUTS[action];
-        void savePanelShortcuts();
-      });
+      reset.addEventListener('click', () => onReset(action));
       row.appendChild(reset);
     }
-    panelShortcutsEl.appendChild(row);
+    container.appendChild(row);
   }
+}
+
+/** The panel shortcuts, with a recorder per row. */
+function renderPanelShortcuts() {
+  renderRecorderList(panelShortcutsEl, 'panel', PANEL_ACTIONS, PANEL_ACTION_LABELS, DEFAULT_PANEL_SHORTCUTS, panelShortcuts, (action) => {
+    panelShortcuts[action] = DEFAULT_PANEL_SHORTCUTS[action];
+    void savePanelShortcuts();
+  });
+}
+
+/** The page shortcuts (the browser commands' twins), with a recorder per row. */
+function renderPageShortcuts() {
+  renderRecorderList(pageShortcutsEl, 'page', PAGE_ACTIONS, PAGE_ACTION_LABELS, DEFAULT_PAGE_SHORTCUTS, pageShortcuts, (action) => {
+    pageShortcuts[action] = DEFAULT_PAGE_SHORTCUTS[action];
+    void savePageShortcuts();
+  });
 }
 
 /** Show the current bindings on the Install button and preview tabs. */
@@ -931,8 +1080,9 @@ function renderKeyHints() {
 
 let recordingBtn: HTMLButtonElement | null = null;
 
-function startRecording(action: PanelAction, btn: HTMLButtonElement) {
+function startRecording(group: 'panel' | 'page', action: PanelAction | PageAction, btn: HTMLButtonElement) {
   cancelRecording();
+  recordingGroup = group;
   recordingAction = action;
   recordingBtn = btn;
   btn.classList.add('is-recording');
@@ -945,6 +1095,20 @@ function cancelRecording() {
   recordingAction = null;
   recordingBtn = null;
   renderPanelShortcuts();
+  renderPageShortcuts();
+}
+
+/** Store a recorded combo (or null to unbind) in the table being recorded. */
+function commitRecording(action: PanelAction | PageAction, text: string | null): void {
+  recordingAction = null;
+  recordingBtn = null;
+  if (recordingGroup === 'page') {
+    pageShortcuts[action as PageAction] = text;
+    void savePageShortcuts();
+  } else {
+    panelShortcuts[action as PanelAction] = text;
+    void savePanelShortcuts();
+  }
 }
 
 function showShortcutError(btn: HTMLElement, reason: string) {
@@ -992,35 +1156,65 @@ function onKeyDown(e: KeyboardEvent) {
       return;
     }
     if (pressed.key === 'Backspace' && !pressed.mod && !pressed.alt && !pressed.shift) {
-      panelShortcuts[action] = null;
-      recordingAction = null;
-      recordingBtn = null;
-      void savePanelShortcuts();
+      commitRecording(action, null);
       return;
     }
     const text = serializeCombo(pressed);
-    const check = validateCombo(text, action, panelShortcuts);
+    const check =
+      recordingGroup === 'page'
+        ? validatePageCombo(text, action as PageAction, pageShortcuts, panelShortcuts)
+        : validateCombo(text, action as PanelAction, panelShortcuts, pageShortcuts);
     if (!check.ok) {
       showShortcutError(btn, check.reason ?? 'That shortcut cannot be used.');
       renderCaps(btn, [], 'Press keys…');
       return;
     }
-    panelShortcuts[action] = text;
-    recordingAction = null;
-    recordingBtn = null;
-    void savePanelShortcuts();
+    commitRecording(action, text);
     return;
   }
 
   if (!pressed) return;
   const action = actionForCombo(panelShortcuts, pressed);
-  if (!action) return;
-  if (comboIsBareKey(pressed) && isEditable(e.target)) return;
+  if (action) {
+    if (comboIsBareKey(pressed) && isEditable(e.target)) return;
+    if (runAction(action)) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    return;
+  }
 
-  const handled = runAction(action);
-  if (handled) {
+  // Page shortcuts pressed while the finder itself is focused. The page
+  // listener never sees these keys here, so forward them ourselves.
+  const pageAction = pageActionForCombo(pageShortcuts, pressed);
+  if (pageAction && runPageAction(pageAction)) {
     e.preventDefault();
     e.stopPropagation();
+  }
+}
+
+/** A page shortcut inside the finder. Returns false when it means nothing here. */
+function runPageAction(action: PageAction): boolean {
+  if (runningInHelper) return false;
+  switch (action) {
+    case 'open-finder':
+      if (runningInOverlay) {
+        try {
+          window.parent.postMessage({ type: 'kicad-overlay-close' }, '*');
+        } catch {
+          /* not framed */
+        }
+        return true;
+      }
+      // The worker decides: it knows whether we are a side panel, a window, or a tab.
+      chrome.runtime
+        .sendMessage({ type: 'PAGE_COMMAND', name: 'open-finder', windowId: myWindowId ?? undefined })
+        .catch(() => {});
+      return true;
+    case 'install-current':
+      return runAction('install');
+    case 'search-selection':
+      return false; // nothing highlighted inside the finder
   }
 }
 
@@ -1074,7 +1268,7 @@ function dismiss(): boolean {
     return true;
   }
   if (searchInput.value) {
-    searchInput.value = '';
+    setSearchValue('');
     searchInput.focus();
     return true;
   }
@@ -1401,6 +1595,7 @@ function stale(seq: number): boolean {
 
 async function runSearch(rawQuery: string) {
   const query = rawQuery.trim();
+  searchDirty = false;
   hideOffer();
   hide(candidateSection);
   hide(partCard);
@@ -1436,7 +1631,7 @@ async function runSearch(rawQuery: string) {
     try {
       const resp = await chrome.runtime.sendMessage({ type: 'RESOLVE_MPN', mpn: query });
       if (resp?.ok) {
-        matches = resp.matches as JlcMatch[];
+        matches = Array.isArray(resp.matches) ? (resp.matches as JlcMatch[]) : [];
         relaxed = Boolean(resp.relaxed);
         matchedQuery = (resp.matchedQuery as string) || '';
         diagnostic = (resp.diagnostic as string) || 'no diagnostic';
@@ -1838,7 +2033,7 @@ function resetForAnother() {
   hide(searchStatus);
   successPanel.classList.remove('is-partial');
   setInstallButton('idle');
-  searchInput.value = '';
+  setSearchValue('');
   searchInput.focus();
   refreshReadiness();
 }

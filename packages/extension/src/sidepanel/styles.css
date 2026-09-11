@@ -767,6 +767,16 @@ code {
   flex-shrink: 0;
 }
 
+
+/* Highlight-to-search unavailable on this page: quiet, under the search box. */
+.selection-hint {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+.selection-hint .link-btn { font-size: 11px; }
+
 /* ===========================================================================
    Status line (search + install) with kind variants
    ======================================================================== */

@@ -1,15 +1,14 @@
 {
   "name": "kicad-part-finder",
   "private": true,
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "dev:server": "pnpm --filter @kicad-part-finder/server dev",
     "dev:extension": "pnpm --filter @kicad-part-finder/extension dev",
     "build": "pnpm -r build",
-    "build:server": "pnpm --filter @kicad-part-finder/server build",
     "build:extension": "pnpm --filter @kicad-part-finder/extension build",
     "test": "pnpm -r test",
-    "test:server": "pnpm --filter @kicad-part-finder/server test",
     "test:extension": "pnpm --filter @kicad-part-finder/extension test"
   },
   "devDependencies": {
