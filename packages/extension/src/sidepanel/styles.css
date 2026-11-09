@@ -1,107 +1,110 @@
 /*
- * KiCad Part Finder — side panel / floating window.
+ * KiCad Part Finder: side panel, tab, floating window, overlay.
  *
- * Design language: a calm "instrument readout". Near-monochrome dark surface,
- * hairline borders, ONE functional accent (a signal green for ready/go/success)
- * plus amber strictly for "needs your attention". Part numbers are the hero
- * typography — everything identifier-shaped is set in monospace, like a meter
- * display. Generous spacing, clear hierarchy, smooth state transitions.
+ * Plain mid-century information design: warm paper (or a black ground in dark
+ * mode), ink type in a plain sans, thin rules, and flat blocks of colour.
+ * No gradients, glows, or shadows. Colour has one job each:
+ *   teal      ready, go, success
+ *   mustard   needs a look
+ *   vermilion error
+ *   black ink the main action
+ * The brand mark's four blocks (cyan, mustard, terracotta, teal) are the only
+ * decoration. Monospace is for file paths and code only.
  *
- * Renders the same in three places: Chrome side panel (~360–460px), the
- * popup-window fallback (~460px), and the Document Picture-in-Picture window
- * (460×760). The single `#app` node is what PiP moves in and out, so all styling
- * hangs off it and the design tokens below.
+ * Light is the default; dark follows the OS unless pinned in Settings
+ * (data-theme on <html>). Everything hangs off #app so Document
+ * Picture-in-Picture can move it between windows.
  */
 
 :root {
-  /* --- Surfaces: layered near-blacks (raised = lighter) ------------------- */
-  --bg:            #0c0d10;   /* page */
-  --surface-1:     #131419;   /* panels / cards */
-  --surface-2:     #1a1c23;   /* inset fields, pills */
-  --surface-3:     #22242d;   /* hover / raised controls */
-
-  /* --- Hairlines ---------------------------------------------------------- */
-  --line:          rgba(255, 255, 255, 0.07);
-  --line-strong:   rgba(255, 255, 255, 0.12);
-
-  /* --- Text --------------------------------------------------------------- */
-  --text:          #e7e8ec;   /* primary */
-  --text-dim:      #9ea0aa;   /* secondary */
-  --text-faint:    #8a8c97;   /* tertiary / micro-labels (AA at 11px on --bg) */
-
-  /* --- The ONE accent: a calm signal green (ready / go / success) --------- */
-  --accent:        #46c08a;
-  --accent-bright: #5fd6a0;
-  --accent-dim:    #2f8463;
-  /* Tinted fills derived from the accent — kept in oklab so the wash stays in
-     the same perceptual family as the accent, never muddy. */
-  --accent-wash:   color-mix(in oklab, var(--accent) 14%, transparent);
-  --accent-edge:   color-mix(in oklab, var(--accent) 42%, transparent);
-  --accent-ink:    color-mix(in oklab, var(--accent) 78%, white 22%);
-
-  /* --- Amber: strictly "needs attention / confirm" ------------------------ */
-  --warn:          #e0a64b;
-  --warn-wash:     color-mix(in oklab, var(--warn) 13%, transparent);
-  --warn-edge:     color-mix(in oklab, var(--warn) 40%, transparent);
-
-  /* --- Danger (errors only) ---------------------------------------------- */
-  --danger:        #e2685f;
-  --danger-wash:   color-mix(in oklab, var(--danger) 13%, transparent);
-
-  /* --- Type --------------------------------------------------------------- */
-  --font-ui:   -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
-
-  --radius:    10px;
-  --radius-sm: 7px;
-  --radius-xs: 5px;
-
-  --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-edge);
-  --btn-primary-ink: #04130c;
-  color-scheme: dark;
+  --bg:            #efede6;   /* paper */
+  --surface-1:     #f8f7f2;   /* cards, panels */
+  --surface-2:     #e6e3d9;   /* fields, chips */
+  --surface-3:     #dbd7cb;   /* hover */
+  --line:          rgba(28, 28, 26, 0.14);
+  --line-strong:   rgba(28, 28, 26, 0.36);
+  --text:          #1c1c1a;   /* ink */
+  --text-dim:      #4c4a44;
+  --text-faint:    #625f58;
+  --accent:        #2e8b74;   /* teal: ready, go, success */
+  --accent-bright: #23705d;
+  --accent-dim:    #2e8b74;
+  --accent-ink:    #1d6150;
+  --accent-wash:   #d3e7df;
+  --accent-edge:   #2e8b74;
+  --warn:          #8a5a00;   /* mustard: needs a look */
+  --warn-wash:     #f3e1ad;
+  --warn-edge:     #d9a21e;
+  --danger:        #a8321f;   /* vermilion: error */
+  --danger-wash:   #f6d4cb;
+  --btn-primary:   #1c1c1a;
+  --btn-primary-ink: #f8f7f2;
+  --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--text);
+  color-scheme: light;
+  --block-1: #2b9cc4;   /* cyan */
+  --block-2: #e2b33c;   /* mustard */
+  --block-3: #e07b45;   /* terracotta */
+  --block-4: #3e9a86;   /* teal */
+  --font-ui:   'Helvetica Neue', Helvetica, Arial, system-ui, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --radius:    3px;
+  --radius-sm: 2px;
+  --radius-xs: 2px;
 }
 
-/* Light theme: the same layout, a token swap. Follows the OS unless the user
-   pins a theme in Settings (data-theme on <html>). */
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme='dark']) {
-    --bg:            #f5f5f3;
-    --surface-1:     #ffffff;
-    --surface-2:     #f0f0ee;
-    --surface-3:     #e5e5e2;
-    --line:          rgba(0, 0, 0, 0.08);
-    --line-strong:   rgba(0, 0, 0, 0.14);
-    --text:          #1a1b1f;
-    --text-dim:      #55575f;
-    --text-faint:    #767882;
-    --accent:        #1f8f5f;
-    --accent-bright: #177a50;
-    --accent-dim:    #2f8463;
-    --accent-ink:    color-mix(in oklab, var(--accent) 85%, black 15%);
-    --warn:          #9a6108;
-    --danger:        #c2413a;
-    --btn-primary-ink: #ffffff;
-    color-scheme: light;
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg:            #141412;   /* black ground */
+    --surface-1:     #1d1d1a;
+    --surface-2:     #282824;
+    --surface-3:     #33332d;
+    --line:          rgba(238, 234, 224, 0.12);
+    --line-strong:   rgba(238, 234, 224, 0.3);
+    --text:          #eeeae0;
+    --text-dim:      #b9b4a8;
+    --text-faint:    #9c988c;
+    --accent:        #5dbb9f;
+    --accent-bright: #7ccdb4;
+    --accent-dim:    #5dbb9f;
+    --accent-ink:    #8fd6c0;
+    --accent-wash:   #22362f;
+    --accent-edge:   #5dbb9f;
+    --warn:          #f0c969;
+    --warn-wash:     #3a3120;
+    --warn-edge:     #c99a2e;
+    --danger:        #f07a62;
+    --danger-wash:   #3d241e;
+    --btn-primary:   #eeeae0;
+    --btn-primary-ink: #141412;
+    --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--text);
+    color-scheme: dark;
   }
 }
-:root[data-theme='light'] {
-  --bg:            #f5f5f3;
-  --surface-1:     #ffffff;
-  --surface-2:     #f0f0ee;
-  --surface-3:     #e5e5e2;
-  --line:          rgba(0, 0, 0, 0.08);
-  --line-strong:   rgba(0, 0, 0, 0.14);
-  --text:          #1a1b1f;
-  --text-dim:      #55575f;
-  --text-faint:    #767882;
-  --accent:        #1f8f5f;
-  --accent-bright: #177a50;
-  --accent-dim:    #2f8463;
-  --accent-ink:    color-mix(in oklab, var(--accent) 85%, black 15%);
-  --warn:          #9a6108;
-  --danger:        #c2413a;
-  --btn-primary-ink: #ffffff;
-  color-scheme: light;
+:root[data-theme='dark'] {
+  --bg:            #141412;   /* black ground */
+  --surface-1:     #1d1d1a;
+  --surface-2:     #282824;
+  --surface-3:     #33332d;
+  --line:          rgba(238, 234, 224, 0.12);
+  --line-strong:   rgba(238, 234, 224, 0.3);
+  --text:          #eeeae0;
+  --text-dim:      #b9b4a8;
+  --text-faint:    #9c988c;
+  --accent:        #5dbb9f;
+  --accent-bright: #7ccdb4;
+  --accent-dim:    #5dbb9f;
+  --accent-ink:    #8fd6c0;
+  --accent-wash:   #22362f;
+  --accent-edge:   #5dbb9f;
+  --warn:          #f0c969;
+  --warn-wash:     #3a3120;
+  --warn-edge:     #c99a2e;
+  --danger:        #f07a62;
+  --danger-wash:   #3d241e;
+  --btn-primary:   #eeeae0;
+  --btn-primary-ink: #141412;
+  --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--text);
+  color-scheme: dark;
 }
 
 * {
@@ -120,14 +123,7 @@ body {
   line-height: 1.45;
   color: var(--text);
   background: var(--bg);
-  /* A barely-there top glow gives the dark surface depth without colour
-     (oklab, neutral). No ruled-line texture: it tiled edge-to-edge and
-     looked wrong across a wide browser tab. */
-  background-image:
-    radial-gradient(120% 60% at 50% -10%,
-      color-mix(in oklab, var(--accent) 6%, transparent) 0%,
-      transparent 60%);
-  background-attachment: fixed;
+  font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   min-width: 320px;
@@ -144,7 +140,7 @@ body {
   gap: 14px;
 }
 
-.mono { font-family: var(--font-mono); font-feature-settings: 'ss01', 'cv01'; }
+.mono { font-variant-numeric: tabular-nums; }
 .hidden { display: none !important; }
 
 /* ===========================================================================
@@ -165,29 +161,22 @@ body {
   min-width: 0;
 }
 
-/* A small etched bullseye mark — reads as a "land/pad" without an icon font. */
+/* Four flat blocks, like a stacked chart. */
 .brand-mark {
-  width: 15px;
-  height: 15px;
-  border-radius: 50%;
-  border: 1.5px solid var(--accent);
-  position: relative;
+  width: 14px;
+  height: 14px;
   flex-shrink: 0;
-  box-shadow: 0 0 10px color-mix(in oklab, var(--accent) 35%, transparent);
-}
-.brand-mark::after {
-  content: '';
-  position: absolute;
-  inset: 3.5px;
-  border-radius: 50%;
-  background: var(--accent);
+  background:
+    linear-gradient(var(--block-1), var(--block-1)) 0 0 / 50% 50% no-repeat,
+    linear-gradient(var(--block-2), var(--block-2)) 100% 0 / 50% 50% no-repeat,
+    linear-gradient(var(--block-3), var(--block-3)) 0 100% / 50% 50% no-repeat,
+    linear-gradient(var(--block-4), var(--block-4)) 100% 100% / 50% 50% no-repeat;
 }
 
 .brand-name {
-  font-size: 12.5px;
-  font-weight: 650;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   color: var(--text);
 }
 
@@ -254,13 +243,6 @@ body {
 .live-dot {
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--accent-bright);
-  box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 60%, transparent);
-  animation: pulse 2s ease-out infinite;
-}
-@keyframes pulse {
-  0%   { box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 55%, transparent); }
-  70%  { box-shadow: 0 0 0 6px transparent; }
-  100% { box-shadow: 0 0 0 0 transparent; }
 }
 
 /* ===========================================================================
@@ -306,16 +288,13 @@ body {
 }
 .pill-body { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
 .pill-key {
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
+  font-size: 10.5px;
+  font-weight: 500;
   color: var(--text-faint);
 }
 .pill-value {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 550;
+  font-size: 12.5px;
+  font-weight: 600;
   color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
@@ -478,7 +457,7 @@ body {
   border-radius: 50%;
   border: 1px solid var(--line-strong);
   background: var(--surface-2);
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 11px;
   font-weight: 700;
   color: var(--text-dim);
@@ -502,10 +481,8 @@ body {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 9.5px;
-  font-weight: 700;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 600;
   color: var(--text-faint);
   margin-bottom: 6px;
 }
@@ -537,14 +514,12 @@ code {
   font-family: var(--font-ui);
   transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
 }
-.text-input.mono { font-family: var(--font-mono); }
 .text-input::placeholder { color: var(--text-faint); }
 .text-input:hover { border-color: var(--line-strong); }
 .text-input:focus {
   outline: none;
-  border-color: var(--accent-edge);
-  background: color-mix(in oklab, var(--surface-2) 88%, var(--accent) 12%);
-  box-shadow: 0 0 0 3px var(--accent-wash);
+  border-color: var(--text);
+  background: var(--surface-1);
 }
 
 /* Fields whose value is empty/uncertain — gently flagged amber for confirmation. */
@@ -552,7 +527,7 @@ code {
   border-color: var(--warn-edge);
   background: var(--warn-wash);
 }
-.text-input.needs-confirm:focus { box-shadow: 0 0 0 3px var(--warn-wash); }
+.text-input.needs-confirm:focus { border-color: var(--warn-edge); }
 
 .select-wrap { position: relative; }
 .select-wrap::after {
@@ -579,12 +554,10 @@ code {
   cursor: pointer;
   transition: border-color 0.16s ease, box-shadow 0.16s ease;
 }
-.select.mono { font-family: var(--font-mono); }
 .select:hover { border-color: var(--line-strong); }
 .select:focus {
   outline: none;
-  border-color: var(--accent-edge);
-  box-shadow: 0 0 0 3px var(--accent-wash);
+  border-color: var(--text);
 }
 
 .field { display: flex; flex-direction: column; }
@@ -598,11 +571,9 @@ code {
   display: inline-flex;
   align-items: center;
   padding: 1px 6px;
-  border-radius: 999px;
-  font-size: 8.5px;
-  font-weight: 800;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  border-radius: var(--radius-xs);
+  font-size: 10px;
+  font-weight: 600;
   background: var(--warn-wash);
   border: 1px solid var(--warn-edge);
   color: var(--warn);
@@ -638,13 +609,11 @@ code {
 /* Primary = the confident "go": solid accent. */
 .btn-primary {
   width: 100%;
-  background: var(--accent);
+  background: var(--btn-primary);
   color: var(--btn-primary-ink);
-  border-color: color-mix(in oklab, var(--accent) 70%, black 30%);
-  box-shadow: 0 1px 0 color-mix(in oklab, var(--accent) 40%, white 12%) inset,
-              0 6px 16px -8px color-mix(in oklab, var(--accent) 60%, transparent);
+  border-color: var(--btn-primary);
 }
-.btn-primary:hover:not(:disabled) { background: var(--accent-bright); }
+.btn-primary:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); }
 .btn-primary.is-busy {
   background: var(--surface-3);
   color: var(--text-dim);
@@ -690,9 +659,8 @@ code {
   transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
 }
 .search-field:focus-within {
-  border-color: var(--accent-edge);
-  box-shadow: 0 0 0 3px var(--accent-wash);
-  background: color-mix(in oklab, var(--surface-2) 90%, var(--accent) 10%);
+  border-color: var(--text);
+  background: var(--surface-1);
 }
 .search-glyph {
   width: 17px;
@@ -730,14 +698,12 @@ code {
   background: transparent;
   color: var(--accent-ink);
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
   cursor: pointer;
   transition: background 0.16s ease, color 0.16s ease;
 }
-.search-go:hover:not(:disabled) { background: var(--accent-wash); color: var(--accent-bright); }
+.search-go:hover:not(:disabled) { background: var(--accent-wash); color: var(--accent-ink); }
 .search-go:focus-visible { outline: none; box-shadow: inset var(--ring); }
 .search-go:disabled { color: var(--text-faint); cursor: not-allowed; }
 
@@ -834,19 +800,14 @@ code {
 .card {
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
-  background:
-    linear-gradient(var(--surface-1), var(--surface-1)) padding-box,
-    linear-gradient(180deg, var(--accent-edge), transparent 38%) border-box;
-  border: 1px solid transparent;
+  background: var(--surface-1);
   overflow: hidden;
   animation: card-in 0.26s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .card-head {
   padding: 14px 14px 12px;
-  background:
-    radial-gradient(110% 80% at 0% 0%, var(--accent-wash), transparent 55%),
-    var(--surface-1);
+  background: var(--surface-1);
   border-bottom: 1px solid var(--line);
 }
 .card-head-top {
@@ -862,7 +823,7 @@ code {
   gap: 5px;
   text-decoration: none;
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-xs);
   font-size: 10.5px;
   font-weight: 650;
   letter-spacing: 0.03em;
@@ -879,8 +840,8 @@ code {
   max-width: 100%;
   white-space: nowrap;
   padding: 2px 9px;
-  border-radius: 999px;
-  font-family: var(--font-mono);
+  border-radius: var(--radius-xs);
+  font-family: var(--font-ui);
   font-size: 10.5px;
   font-weight: 600;
   border: 1px solid var(--line);
@@ -973,7 +934,6 @@ code {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background:
-    radial-gradient(120% 90% at 50% 0%, color-mix(in oklab, var(--accent) 5%, transparent), transparent 60%),
     linear-gradient(var(--line) 1px, transparent 1px) 0 0 / 100% 12px,
     linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0 / 12px 100%,
     var(--bg);
@@ -1141,7 +1101,7 @@ code {
   display: inline-flex;
   align-items: center;
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-xs);
   font-size: 10.5px;
   font-weight: 650;
   border: 1px solid var(--line);
@@ -1214,10 +1174,8 @@ code {
   padding-top: 2px;
 }
 .sources-label {
-  font-size: 9.5px;
-  font-weight: 700;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 600;
   color: var(--text-faint);
   margin-bottom: 8px;
 }
@@ -1375,7 +1333,7 @@ code {
   flex-shrink: 0;
   width: 34px;
   height: 20px;
-  border-radius: 999px;
+  border-radius: var(--radius-xs);
   background: var(--surface-3);
   border: 1px solid var(--line-strong);
   position: relative;
@@ -1492,12 +1450,12 @@ kbd.btn-kbd {
 .candidate:hover { border-color: var(--line-strong); background: var(--surface-2); }
 .candidate:focus-visible { outline: none; box-shadow: var(--ring); }
 .candidate[aria-selected='true'] { border-color: var(--accent-edge); background: var(--accent-wash); }
-.candidate-mpn { font-family: var(--font-mono); font-size: 12.5px; font-weight: 650; }
-.candidate-meta { font-size: 10.5px; color: var(--text-faint); font-family: var(--font-mono); grid-column: 1; }
-.candidate-stock { font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; color: var(--accent); grid-row: 1 / span 2; align-self: center; white-space: nowrap; }
+.candidate-mpn { font-size: 13px; font-weight: 650; }
+.candidate-meta { font-size: 11px; color: var(--text-faint); grid-column: 1; }
+.candidate-stock { font-size: 11px; font-weight: 600; color: var(--accent); grid-row: 1 / span 2; align-self: center; white-space: nowrap; }
 .candidate-stock.is-low { color: var(--warn); }
 .candidate-stock.is-none { color: var(--text-faint); }
-.candidate-exact { font-size: 9px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent-ink); margin-left: 6px; }
+.candidate-exact { font-size: 10px; font-weight: 600; color: var(--accent-ink); margin-left: 6px; }
 
 /* Success / partial states */
 .success-panel.is-partial .written-list { border-color: var(--warn-edge); background: var(--warn-wash); }
