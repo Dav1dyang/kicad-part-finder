@@ -14,12 +14,13 @@ packages/extension          Chrome extension (Vite build, vitest tests)
   src/sidepanel/            The UI document. Runs in the side panel, a tab, a popup window,
                             the overlay iframe, and short-lived helper windows.
   src/lib/                  converter/ (EasyEDA -> KiCad), jlcpcb.ts, library-writer.ts (FS Access),
-                            autosort.ts (category -> bucket), shortcuts.ts, relay-url.ts
+                            library-config.ts (prefix, path variable, table rows), verify-part.ts
+                            (provenance + pin/pad checks), autosort.ts (category -> bucket),
+                            sexpr.ts, shortcuts.ts, relay-url.ts, types.ts
 packages/relay              Cloudflare Worker + Vercel edge function that proxies JLCPCB/EasyEDA
-packages/shared             Shared types
 ```
 
-Data flow: page or typed query -> service worker -> relay -> JLCPCB (MPN to LCSC id, stock, price) and EasyEDA (symbol, footprint, 3D) -> converter -> card -> `installPart()` writes into the granted folder.
+Data flow: page or typed query -> service worker -> relay -> JLCPCB (MPN to LCSC id, stock, price) and EasyEDA (symbol, footprint, 3D, provenance) -> converter -> `verifyPart()` -> card -> `installPart()` writes into the granted folder.
 
 ## The UI runs in five contexts
 
@@ -40,6 +41,7 @@ Helper windows report back with `OVERLAY_HELPER_DONE`; the service worker rebroa
 | Key | Where | Purpose |
 |-----|-------|---------|
 | `relayUrl` | `chrome.storage.local` | The relay origin, normalized (no trailing slash) |
+| `libraryConfig` | `chrome.storage.local` | `{ prefix, pathVar }`, default `DavidLib` / `DAVID_KICAD_LIB` (see `library-config.ts`) |
 | `openMode` | `chrome.storage.local` | `auto`, `window`, or `overlay` |
 | `overlayBounds` | `chrome.storage.local` | Overlay position, size, minimized state |
 | `overlayLibraryName` | `chrome.storage.local` | Folder name mirror for the overlay iframe, which cannot hold the handle |
@@ -58,9 +60,11 @@ Helper windows report back with `OVERLAY_HELPER_DONE`; the service worker rebroa
 - **The page listener runs wherever we may run.** DigiKey and LCSC pages get it from the manifest, the tab the finder was opened on gets it through `activeTab`, and every site gets a registered content script once the user grants the optional all-sites permission. The service worker reports `selectionReady` to the finder so it can say when a page cannot reach it.
 - **The relay is required for search, convert, previews, and the STEP download.** The folder is required only at install time. Gate the UI accordingly.
 - **Never use `innerHTML` with data from the network.** Part names come from JLCPCB and EasyEDA; render with `textContent`.
-- **Library writes are append-and-dedupe.** `mergeSymbolLibrary` skips a symbol whose name already exists. Footprints are overwritten by name. The symbol's `Footprint` field is qualified as `DavidLib_<Bucket>:<name>` so KiCad links them automatically.
+- **Library writes are append-and-dedupe.** `mergeSymbolLibrary` skips a symbol whose name already exists. Footprints are overwritten by name. The symbol's `Footprint` field is qualified as `<prefix>_<Bucket>:<name>` so KiCad links them automatically. Never hard-code `DavidLib` or `DAVID_KICAD_LIB`; go through `library-config.ts`.
+- **Check before writing.** `verifyPart()` reports provenance (EasyEDA `verify` flag and owner), pin and pad counts, and pin-to-pad matching. A blocking report (damaged file) disables Install; warnings only inform.
+- **The relay is versioned.** `RELAY_VERSION` in `packages/relay/src/index.ts` must equal `REQUIRED_RELAY_VERSION` in `src/lib/relay-url.ts` (a relay test enforces it). Bump both when an endpoint is added or changes shape.
 - **Browser-level shortcuts cannot be set by the extension.** `chrome.commands.getAll()` reads them; changing one means sending the user to `chrome://extensions/shortcuts`. Arc and Dia never deliver them, so the page listener forwards the same three actions as `PAGE_COMMAND`; the worker dedupes a command and its page twin within 500 ms. Panel and page shortcuts are ours and live in `src/lib/shortcuts.ts`.
-- **`open-finder` is a toggle.** The worker finds open side panels with `chrome.runtime.getContexts` (no bookkeeping, nothing keeping the worker awake); closing asks the panel document to `window.close()`, then falls back to a global `sidePanel.setOptions({ enabled: false })` and re-enable, only while one window shows the panel (per-tab options would make the panel tab-scoped). The floating window is minimized, not closed, so its folder grant survives.
+- **`open-finder` is a toggle, and `sidePanel.open()` must stay inside the gesture.** On Chrome 141+ and Dia, `sidePanel.onOpened`/`onClosed` keep an in-memory set of open windows (re-seeded from `runtime.getContexts` after a worker restart), so the toggle decides without an await, and `sidePanel.close({ windowId })` closes it. Older browsers fall back to `getContexts`, asking the panel document to `window.close()`, then a global `setOptions({ enabled: false })` and re-enable while only one window shows the panel. The floating window is minimized, not closed, so its folder grant survives. The floating window is minimized, not closed, so its folder grant survives.
 - **Pure logic goes in its own module with tests.** Everything under `src/lib` and the `preview-*`, `overlay-bounds`, `overlay-params`, `source-tab` modules is DOM-free and unit-tested. Keep it that way when adding features.
 
 ## Chrome extension guidance

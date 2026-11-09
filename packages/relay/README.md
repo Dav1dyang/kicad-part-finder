@@ -1,93 +1,77 @@
 # kicad-part-relay
 
-A tiny **Cloudflare Worker** that proxies the JLCPCB and EasyEDA APIs for the
-KiCad Part Finder browser extension.
+A small stateless proxy that fetches from JLCPCB and EasyEDA for the KiCad Part Finder extension.
 
-## Why this exists
+## Why it exists
 
-The extension runs entirely in the browser (Manifest V3, no companion server).
-But JLCPCB and EasyEDA sit behind WAFs that return **HTTP 403** to browser
-`fetch()` calls — even with spoofed `Referer` / `User-Agent` headers — because
-they fingerprint the request as coming from a browser extension. The same
-requests made **server-side** (a plain `curl` with a desktop Chrome UA and the
-right `Referer`) come back **200**.
-
-So this Worker does the real upstream fetch on the server and returns the body
-to the extension with permissive CORS headers. The extension talks only to your
-Worker; the Worker talks to JLCPCB/EasyEDA.
+JLCPCB and EasyEDA answer HTTP 403 to requests from a browser extension, even with spoofed headers. The same requests made from a server succeed. The relay makes them and returns the body with open CORS headers. It has no secrets, stores nothing, and fits the free tier of Cloudflare or Vercel.
 
 ## Endpoints
 
-All endpoints are `GET` and every response (including errors and the `OPTIONS`
-preflight) carries permissive CORS headers (`Access-Control-Allow-Origin: *`).
+All are `GET`. On Vercel the same paths live under `/api`.
 
-| Endpoint | Proxies | Returns |
-| --- | --- | --- |
-| `GET /` | — | `text/plain` `kicad-part-relay ok` (health check) |
-| `GET /jlcpcb/search?keyword=X` | `POST` JLCPCB `selectSmtComponentList` (`{keyword, pageSize:15, currentPage:1}`) | JLCPCB JSON verbatim |
-| `GET /easyeda/component?lcsc=C123` | `GET` `easyeda.com/api/products/<lcsc>/components?version=6.4.19.5` | EasyEDA JSON verbatim |
-| `GET /easyeda/model?uuid=HEX` | `GET` `modules.easyeda.com/qAxj6KHrDKw4blvCG8QJPs7Y/<uuid>` | STEP model bytes (streamed, upstream `Content-Type`) |
+| Path | Upstream | Returns | Cached |
+|------|----------|---------|--------|
+| `/` | none | `kicad-part-relay ok v2` | no |
+| `/jlcpcb/search?keyword=X` | JLCPCB parts search | JSON, verbatim | 5 min |
+| `/easyeda/component?lcsc=C123` | EasyEDA component (symbol, footprint, provenance) | JSON, verbatim | 1 h browser, 1 day edge |
+| `/easyeda/model?uuid=HEX` | EasyEDA STEP store | STEP bytes, streamed | 7 days |
+| `/easyeda/model-obj?uuid=HEX` | EasyEDA OBJ store (3D preview) | OBJ text | 7 days |
 
-On any upstream error the Worker returns `{ "error": "...", "status": <code> }`
-JSON at the upstream status code. `lcsc` must match `^C\d+$`; `uuid` must be hex.
+Errors come back as `{ "error": "...", "status": <code> }` with the upstream status, 502 when the upstream is unreachable, or 504 after 15 seconds. Inputs are validated first: `lcsc` must look like `C123`, `uuid` must be hex, `keyword` at most 100 characters.
+
+The health check carries a version. The extension compares it with the one it needs and asks you to redeploy an older relay. Bump `RELAY_VERSION` in `src/index.ts` when an endpoint is added or changes; a test keeps it equal to the extension's `REQUIRED_RELAY_VERSION`.
 
 ## Deploy
 
-From this directory (`packages/relay`):
+### Cloudflare Workers
 
-```sh
+```bash
 cd packages/relay
-wrangler login        # one-time: opens a browser to authorize your Cloudflare account
-wrangler deploy       # or: pnpm deploy
 ```
 
-`wrangler deploy` prints the live URL, e.g.:
-
-```
-https://kicad-part-relay.<your-subdomain>.workers.dev
+```bash
+npx wrangler login
 ```
 
-**Copy that URL** and paste it into the extension's **Relay URL** field (in the
-first-run view or in Settings), then click **Test**. The extension persists it in
-`chrome.storage.local` and routes all JLCPCB/EasyEDA traffic through it.
+```bash
+npx wrangler deploy
+```
 
-> No bindings, secrets, or paid features are required — this is a free-tier
-> stateless proxy. A custom domain works too; the extension only needs the URL.
+Paste the printed `https://kicad-part-relay.<you>.workers.dev` into Part Finder and click **Test**.
+
+### Vercel
+
+```bash
+cd packages/relay
+```
+
+```bash
+npx vercel deploy --prod
+```
+
+Paste `https://<project>.vercel.app/api` (with `/api`) into Part Finder.
+
+### Updating
+
+Pull the repo and run the same deploy command again. The URL stays the same.
 
 ## Local development
 
-```sh
-wrangler dev          # serves on http://localhost:8787
+```bash
+npx wrangler dev
 ```
 
-Then point the extension's Relay URL at `http://localhost:8787` to test against
-your local Worker (note: `http://localhost` is not covered by the extension's
-`https://*.workers.dev/*` host permission, so prefer the deployed URL for normal
-use).
+That serves on `http://localhost:8787`, which you can paste as the relay URL while testing.
 
-## Typecheck
+## Tests
 
-```sh
+```bash
+pnpm --filter @kicad-part-finder/relay test
+```
+
+```bash
 pnpm --filter @kicad-part-finder/relay typecheck
 ```
 
-## Deploy on Vercel (alternative to Cloudflare Workers)
-
-The relay also runs as a Vercel Edge Function: the files under `api/` delegate
-to the same Worker handler, which accepts paths with or without the `/api`
-prefix. From this folder:
-
-```bash
-npx vercel deploy --prod    # first run links the project + logs you in
-```
-
-Vercel prints a URL like `https://kicad-part-relay-xxx.vercel.app`. The endpoints
-live under `/api`, so set the extension's **Relay URL** to:
-
-```
-https://<your-project>.vercel.app/api
-```
-
-Sanity check in a browser:
-`https://<your-project>.vercel.app/api/jlcpcb/search?keyword=TPS2116DRLR`
-→ JSON containing TPS2116DRLR / C3235557.
+The tests stub `fetch`, so they need no network.

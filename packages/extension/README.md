@@ -6,7 +6,7 @@ Manifest V3 Chrome extension that finds EasyEDA/LCSC parts and installs KiCad sy
 
 - **Content scripts** detect parts. `digikey.ts` reads the page's JSON-LD; `lcsc.ts` reads the C-number from the URL and follows client-side navigation. `page-listener.ts` turns highlighted text into a search and forwards page shortcuts; it runs on DigiKey and LCSC from the manifest, on the tab the finder was opened on through `activeTab`, and on every site as a registered content script once the user allows all sites.
 - **The service worker** routes messages, opens the finder in the chosen mode, runs the three browser commands, and opens helper windows for the overlay. It keeps every piece of state in `chrome.storage.session` so nothing is lost when Chrome stops the idle worker.
-- **The UI document** (`src/sidepanel/`) is the same page in every mode. It searches and converts through the relay, previews the symbol, footprint, and 3D model, then writes files with the File System Access API.
+- **The UI document** (`src/sidepanel/`) is the same page in every mode. It searches and converts through the relay, previews the symbol, footprint, and 3D model, runs `verifyPart` (provenance and pin/pad checks), then writes files with the File System Access API, named by the user's library prefix and path variable (`src/lib/library-config.ts`).
 - **The relay** (`packages/relay`) does the real JLCPCB and EasyEDA fetches. Both sites block browser requests. The relay URL is stored in `chrome.storage.local` under `relayUrl` and passed to every network helper as `relayBase`.
 
 ## Setup
