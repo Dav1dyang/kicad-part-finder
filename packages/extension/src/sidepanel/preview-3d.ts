@@ -16,6 +16,7 @@
  */
 
 import { uuidFromModelUrl } from './model3d-url.js';
+import { parseInlineMaterials, stripInlineMaterials } from './obj-materials.js';
 
 /** Handle for tearing a mounted 3D preview down. */
 export interface Preview3dHandle {
@@ -165,25 +166,6 @@ export function mount3dPreview(
 }
 
 /**
- * EasyEDA inlines its .mtl material library inside the .obj (newmtl/endmtl/Ka/
- * Kd/Ks/…), which three's OBJLoader doesn't understand — it warns once per such
- * line. We override the material anyway (see buildScene), so WHITELIST the OBJ
- * geometry/structure lines and drop everything else. A whitelist (vs chasing each
- * material keyword) silences any non-standard marker — e.g. EasyEDA's `endmtl` —
- * by construction, keeping the console and the extension errors page clean.
- */
-const OBJ_GEOM_LINE = /^(vn|vt|vp|v|f|l|p|o|g|s)\b/;
-function stripInlinedMtl(objText: string): string {
-  return objText
-    .split('\n')
-    .filter((line) => {
-      const t = line.trim();
-      return t === '' || t.startsWith('#') || OBJ_GEOM_LINE.test(t);
-    })
-    .join('\n');
-}
-
-/**
  * Build the three.js scene for a parsed OBJ and start the render loop. Returns a
  * teardown fn. Separated out so {@link mount3dPreview} stays about flow/states.
  */
@@ -193,19 +175,35 @@ function buildScene(
   container: HTMLElement,
   objText: string,
 ): SceneControls {
-  const obj = new OBJLoader().parse(stripInlinedMtl(objText));
-
-  // Replace EasyEDA's materials with one calm metallic so it reads on the dark
-  // surface regardless of what the OBJ declared (its mtl is inlined/odd).
-  const partMat = new THREE.MeshStandardMaterial({
-    color: 0x9aa3ad,
-    metalness: 0.35,
-    roughness: 0.55,
-  });
+  // EasyEDA writes its colours inline; apply them to the matching usemtl groups.
+  const colours = parseInlineMaterials(objText);
+  const obj = new OBJLoader().parse(stripInlineMaterials(objText));
+  const made = new Map<string, import('three').MeshStandardMaterial>();
+  const materialFor = (name: string): import('three').MeshStandardMaterial => {
+    let mat = made.get(name);
+    if (!mat) {
+      const src = colours.get(name);
+      const [r, g, b] = src?.color ?? [0.6, 0.62, 0.66];
+      mat = new THREE.MeshStandardMaterial({
+        color: new THREE.Color().setRGB(r, g, b, THREE.SRGBColorSpace),
+        metalness: 0.1,
+        roughness: 0.6,
+        transparent: (src?.opacity ?? 1) < 1,
+        opacity: src?.opacity ?? 1,
+        side: THREE.DoubleSide,
+      });
+      made.set(name, mat);
+    }
+    return mat;
+  };
   obj.traverse((child: unknown) => {
-    const mesh = child as { isMesh?: boolean; material?: unknown };
-    if (mesh.isMesh) mesh.material = partMat;
+    const mesh = child as { isMesh?: boolean; material?: { name?: string } | Array<{ name?: string }> };
+    if (!mesh.isMesh) return;
+    mesh.material = Array.isArray(mesh.material)
+      ? mesh.material.map((m) => materialFor(m.name ?? ''))
+      : materialFor(mesh.material?.name ?? '');
   });
+  const disposeMaterials = (): void => made.forEach((m) => m.dispose());
 
   // Center the model on the origin and scale it to a unit-ish size so the camera
   // framing below works for any part.
@@ -225,14 +223,14 @@ function buildScene(
   pivot.rotation.x = -Math.PI / 2 + 0.5;
   scene.add(pivot);
 
-  // Lights: a soft hemisphere fill + one key directional for form.
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x202028, 1.05));
-  const key = new THREE.DirectionalLight(0xffffff, 1.4);
+  // Lights: an even fill so part colours read true, plus one key light for form.
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8a80, 1.6));
+  const key = new THREE.DirectionalLight(0xffffff, 1.2);
   key.position.set(1, 1.5, 1.2);
   scene.add(key);
 
   const camera = new THREE.PerspectiveCamera(40, 1, 0.01, 1000);
-  const dist = maxDim * 2.6;
+  const dist = maxDim * 1.9;
   camera.position.set(0, 0, dist);
   camera.lookAt(0, 0, 0);
 
@@ -246,7 +244,7 @@ function buildScene(
       const mesh = child as { isMesh?: boolean; geometry?: { dispose?: () => void } };
       mesh.geometry?.dispose?.();
     });
-    partMat.dispose();
+    disposeMaterials();
     throw err;
   }
   renderer.setClearColor(0x000000, 0);
@@ -356,7 +354,7 @@ function buildScene(
       const mesh = child as { isMesh?: boolean; geometry?: { dispose?: () => void } };
       mesh.geometry?.dispose?.();
     });
-    partMat.dispose();
+    disposeMaterials();
     renderer.dispose();
     // Best-effort GPU context release.
     renderer.forceContextLoss?.();
