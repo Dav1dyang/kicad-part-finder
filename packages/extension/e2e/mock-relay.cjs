@@ -5,7 +5,7 @@ const path = require('path');
 const FIX = path.join(__dirname, '../src/lib/converter/__tests__/fixtures/');
 const cors = { 'Access-Control-Allow-Origin': '*' };
 
-/** A box body and a gold pad, with materials inline the way EasyEDA writes them. */
+/** A box body and a gold pad, with materials inline the way EasyEDA writes them (d 0.0 = solid). */
 const box = (x0, y0, z0, x1, y1, z1, base) => {
   const v = [];
   for (const x of [x0, x1]) for (const y of [y0, y1]) for (const z of [z0, z1]) v.push(`v ${x} ${y} ${z}`);
@@ -54,8 +54,8 @@ const MANY = Array.from({ length: 15 }, (_, i) => ({
 }));
 
 const COLOURED_OBJ = [
-  'newmtl body', 'Ka 0.1 0.1 0.1', 'Kd 0.12 0.12 0.13', 'd 1', 'endmtl',
-  'newmtl pins', 'Kd 0.86 0.75 0.42', 'd 1', 'endmtl',
+  'newmtl body', 'Ka 0.1 0.1 0.1', 'Kd 0.12 0.12 0.13', 'd 0.0', 'endmtl',
+  'newmtl pins', 'Kd 0.86 0.75 0.42', 'd 0.0', 'endmtl',
   ...body.v, ...pad.v,
   'usemtl body', ...body.f,
   'usemtl pins', ...pad.f,

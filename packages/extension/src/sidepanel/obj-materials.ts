@@ -3,8 +3,8 @@
  *
  *   newmtl mat3
  *   Kd 0.78 0.55 0.18      diffuse colour, 0..1
- *   d 1                    opacity
- *   endmtl
+ *   d 0.0                  transparency: 0 is solid (EasyEDA's meaning,
+ *   endmtl                 the opposite of the standard OBJ "dissolve")
  *   ...
  *   usemtl mat3
  *   f 1 2 3
@@ -43,9 +43,9 @@ export function parseInlineMaterials(objText: string): Map<string, ObjMaterial> 
       const [key, ...vals] = line.split(/\s+/);
       if (key === 'Kd' && vals.length >= 3) {
         current.color = [clamp01(Number(vals[0])), clamp01(Number(vals[1])), clamp01(Number(vals[2]))];
-      } else if (key === 'd' && vals.length >= 1) {
-        current.opacity = clamp01(Number(vals[0]));
-      } else if (key === 'Tr' && vals.length >= 1) {
+      } else if ((key === 'd' || key === 'Tr') && vals.length >= 1) {
+        // EasyEDA writes `d 0.0` for solid parts: it is transparency, not
+        // the standard dissolve. Reading it as opacity hides every model.
         current.opacity = 1 - clamp01(Number(vals[0]));
       } else if (key === 'endmtl') {
         commit();

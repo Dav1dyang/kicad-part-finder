@@ -7,7 +7,7 @@ newmtl body
 Ka 0.2 0.2 0.2
 Kd 0.12 0.12 0.13
 Ks 0.5 0.5 0.5
-d 1
+d 0.0
 endmtl
 newmtl pins
 Kd 0.86 0.75 0.42
@@ -28,6 +28,13 @@ describe('parseInlineMaterials', () => {
     const mats = parseInlineMaterials(OBJ);
     expect(mats.get('body')).toEqual({ color: [0.12, 0.12, 0.13], opacity: 1 });
     expect(mats.get('pins')).toEqual({ color: [0.86, 0.75, 0.42], opacity: 0.5 });
+  });
+
+  it('reads d as transparency, as EasyEDA writes it: d 0.0 is solid', () => {
+    // Verbatim from a real EasyEDA model (TPS2116DRLR, uuid 7de5db90...).
+    const real = 'v -0.135 0.5 -0.125\nnewmtl 1\nKa 0.25098039215686274 0.25098039215686274 0.25098039215686274\nKd 0.25098039215686274 0.25098039215686274 0.25098039215686274\nKs 0.12549019607843137 0.12549019607843137 0.12549019607843137\nd 0.0\nendmtl\nv 1 0 0\nusemtl 1\nf 1// 2// 1//\n';
+    expect(parseInlineMaterials(real).get('1')).toEqual({ color: [0.25098039215686274, 0.25098039215686274, 0.25098039215686274], opacity: 1 });
+    expect(stripInlineMaterials(real)).toBe('v -0.135 0.5 -0.125\nv 1 0 0\nusemtl 1\nf 1// 2// 1//\n');
   });
 
   it('handles a missing endmtl, Tr, and junk values', () => {
