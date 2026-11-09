@@ -128,8 +128,14 @@ async function run(scheme) {
   await shot('Settings, recording a shortcut', { selector: '#settingsPanel' });
   await page.keyboard.press('Escape');
 
-  // 13. 3D tab.
+  // 13. Drawings up close: symbol and footprint must read in both themes.
   await page.click('#settingsBtn');
+  await page.click('#previewTabSymbol');
+  await shot('Symbol drawing', { selector: '.preview' });
+  await page.click('#previewTabFootprint');
+  await shot('Footprint drawing', { selector: '.preview' });
+
+  // 14. 3D tab.
   await page.click('#previewTab3d');
   await shot('3D preview', { selector: '.preview', wait: 1500 });
 

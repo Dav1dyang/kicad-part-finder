@@ -191,14 +191,15 @@ export function parseSymbol(text: string): SymbolModel | null {
 
 // --- Rendering ---------------------------------------------------------------
 
+/** Theme tokens only, so drawings follow light, dark, and the chosen colours. */
 const COLORS = {
   body: 'var(--surface-2)',
   bodyStroke: 'var(--accent)',
-  pin: 'rgba(231, 232, 236, 0.85)',
+  pin: 'var(--text-dim)',
   pinDot: 'var(--accent-bright)',
   name: 'var(--text)',
   number: 'var(--text-dim)',
-  origin: 'rgba(95, 214, 160, 0.55)',
+  origin: 'color-mix(in oklab, var(--accent) 45%, transparent)',
 };
 
 function el(name: string, attrs: Record<string, string | number>): SVGElement {

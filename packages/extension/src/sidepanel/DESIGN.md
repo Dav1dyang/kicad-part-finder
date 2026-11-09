@@ -55,6 +55,20 @@ Colour combinations (`src/lib/palettes.ts`): Apple (default), Lake, Moss, Mist, 
 - **Focus rises.** A focused control gets `z-index: 1` so its ring is never covered by a neighbour's halo.
 - **Inside the card nothing repaints the card colour.** The header is transparent so the card's paper reads as one sheet.
 
+## Drawings (symbol and footprint previews)
+
+Drawings use theme tokens only, never fixed colours, so they read on light paper, dark ground, and every colour combination.
+
+| Element | Colour |
+|---------|--------|
+| Symbol body outline, pin dots | accent |
+| Pin lines, pin numbers | `--text-dim` (ink) |
+| Pin names | `--text` |
+| Pads | main colour field, numbers in its ink (same pairing as Install) |
+| Silkscreen | `--text-dim` at 50 % so pads stay the focus |
+| Courtyard | honey at 65 % |
+| Origin crosshair | accent at 45 % |
+
 ## Exceptions
 
 - **Key caps** keep a thin outline: they picture physical keys.
