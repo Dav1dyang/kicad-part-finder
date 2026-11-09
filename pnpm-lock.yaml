@@ -14,9 +14,6 @@ importers:
 
   packages/extension:
     dependencies:
-      '@kicad-part-finder/shared':
-        specifier: workspace:*
-        version: link:../shared
       three:
         specifier: ^0.184.0
         version: 0.184.0
@@ -42,15 +39,12 @@ importers:
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
-      wrangler:
-        specifier: ^4.0.0
-        version: 4.103.0(@cloudflare/workers-types@4.20260623.1)
-
-  packages/shared:
-    devDependencies:
       vitest:
         specifier: ^3.0.0
         version: 3.2.4(@types/node@22.19.15)(tsx@4.21.0)
+      wrangler:
+        specifier: ^4.0.0
+        version: 4.103.0(@cloudflare/workers-types@4.20260623.1)
 
 packages:
 

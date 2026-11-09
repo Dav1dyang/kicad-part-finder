@@ -1,205 +1,180 @@
 # KiCad Part Finder
 
-A Chrome extension that turns "I found a part on DigiKey or LCSC" into "the symbol, footprint, and 3D model are in my KiCad library" with one click.
+A Chrome extension that takes a part from DigiKey, LCSC, or any page, checks it, and writes its symbol, footprint, and 3D model into your KiCad library folder.
 
-It runs entirely in the browser. There is no companion app to install. Two things make that possible:
-
-- A small **relay** you deploy once (Cloudflare Worker or Vercel edge function). JLCPCB and EasyEDA block browser requests, so the relay fetches on your behalf.
-- The browser's **File System Access API**. You grant the extension your library folder once, and it writes files straight into it.
-
-Works with KiCad 7, 8, 9, and 10.
-
-## How it works
+- **No app to install.** Conversion and file writes happen in the browser.
+- **Checked before it is written.** Each part shows who made it (LCSC or a community uploader) and whether every symbol pin has a footprint pad.
+- **Works in the side panel** of Chrome, Edge, Brave, and Dia, or as a floating window (Arc) or an in-page overlay.
+- KiCad 7, 8, 9, and 10. macOS, Windows, and Linux.
 
 ```
-DigiKey / LCSC page ──detects part──▶ Part Finder panel
-Any page ──highlight text──────────▶       │
-                                           │ search / convert
+DigiKey / LCSC page ─ detects part ─▶ Part Finder panel ◀─ highlight text on any page
+                                           │ search, convert, check
                                            ▼
-                                    Your relay (workers.dev or vercel.app)
+                                   your relay (Cloudflare or Vercel, free)
                                            │
-                                    JLCPCB search · EasyEDA symbol/footprint/STEP
+                               JLCPCB search · EasyEDA symbol, footprint, STEP
                                            │
                                            ▼
-                                    Your library folder (kicad-libraries)
-                                      symbols/DavidLib_<Bucket>.kicad_sym
-                                      footprints/DavidLib_<Bucket>.pretty/
-                                      3dmodels/<uuid>.step
+                                   your library folder
+                                     symbols/<Prefix>_<Bucket>.kicad_sym
+                                     footprints/<Prefix>_<Bucket>.pretty/
+                                     3dmodels/<uuid>.step
 ```
 
-The extension never edits KiCad's global library tables. Those are set up once by the [kicad-libraries](https://github.com/Dav1dyang/kicad-libraries) repo's `tools/setup`, which registers each `DavidLib_<Bucket>` library and the `KiCadPartFinder` catch-all against a `${DAVID_KICAD_LIB}` path variable.
+## Setup (about 10 minutes, once per computer)
 
-## Setup
-
-You need Node.js 20 or newer and pnpm.
+You need Node.js 20+ and pnpm (`npm install -g pnpm`).
 
 ### 1. Build and load the extension
 
 ```bash
 git clone https://github.com/Dav1dyang/kicad-part-finder.git
-cd kicad-part-finder
-pnpm install
-pnpm build:extension
 ```
 
-Then in Chrome open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked**, and pick `packages/extension/dist`.
+```bash
+cd kicad-part-finder && pnpm install && pnpm build:extension
+```
+
+Open `chrome://extensions` (or `edge://`, `brave://`; in Dia use its Extensions page), turn on **Developer mode**, click **Load unpacked**, and pick `packages/extension/dist`.
 
 ### 2. Deploy the relay
 
-Pick one. Both are free-tier and stateless. See [packages/relay/README.md](packages/relay/README.md) for details.
+JLCPCB and EasyEDA refuse requests from browser extensions, so a tiny relay you own makes them instead. It is stateless, has no secrets, and fits the free tier. Deploy one per person; a relay can serve all your computers.
 
-| Host | Command | Relay URL to paste |
+| Host | Command (from `packages/relay`) | Relay URL to paste |
 |------|---------|--------------------|
-| Cloudflare Workers | `cd packages/relay && npx wrangler deploy` | `https://<name>.<you>.workers.dev` |
-| Vercel | `cd packages/relay && npx vercel deploy --prod` | `https://<project>.vercel.app/api` |
+| Cloudflare Workers | `npx wrangler deploy` | `https://kicad-part-relay.<you>.workers.dev` |
+| Vercel | `npx vercel deploy --prod` | `https://<project>.vercel.app/api` |
 
-### 3. Prepare your library folder
+Details in [packages/relay/README.md](packages/relay/README.md).
 
-Clone [kicad-libraries](https://github.com/Dav1dyang/kicad-libraries) and run its `tools/setup` once. That defines `${DAVID_KICAD_LIB}` in KiCad and adds the library nicknames to KiCad's global tables. Restart KiCad afterwards.
+### 3. Point KiCad at a library folder
+
+Part Finder writes into one folder and never edits KiCad's settings. KiCad has to know about that folder once.
+
+**If you use [kicad-libraries](https://github.com/Dav1dyang/kicad-libraries):** clone it and run its `tools/setup`. Done.
+
+**Any other folder:**
+
+1. Make an empty folder, for example `~/Documents/KiCad/parts`.
+2. In KiCad, open **Preferences › Configure Paths** and add a variable (default name `DAVID_KICAD_LIB`; you can pick your own in Settings) pointing at that folder.
+3. Close KiCad. In Part Finder **Settings › KiCad libraries**, click **Copy symbol rows** and paste them inside `sym-lib-table`, then **Copy footprint rows** into `fp-lib-table`. Both files live in KiCad's settings folder (macOS: `~/Library/Preferences/kicad/<version>/`; Windows: `%APPDATA%\kicad\<version>\`; Linux: `~/.config/kicad/<version>/`).
+4. Open KiCad again.
 
 ### 4. Finish in the panel
 
-Open the panel with the toolbar icon or **Cmd+Shift+K** (Mac) / **Ctrl+Shift+K** (Windows, Linux). The first-run view asks for two things:
+Open Part Finder with the toolbar icon or **Cmd+Shift+K** / **Ctrl+Shift+K**. The first-run view asks for:
 
-1. **Relay URL.** Paste the address from step 2 and click **Test**. A green check means searches will work.
-2. **Library folder.** Click **Choose library folder** and pick your `kicad-libraries` clone. Chrome remembers the grant. Search and preview work without it; only Install needs it.
+1. **Relay URL.** Paste it and click **Test**. A green check means search works.
+2. **Library folder.** Click **Choose library folder** and pick the folder from step 3. If it already holds libraries with another prefix, the panel offers to use it.
 
-Both settings live on this computer only. Panel shortcuts sync across your Chrome profile.
+Both stay on this computer. Shortcut changes sync through your browser profile.
 
 ## Using it
 
-**On DigiKey or LCSC** the part is detected automatically and the search box is pre-filled. Press Enter or click Search.
+- **DigiKey or LCSC product page:** the part is detected and searched.
+- **Any page:** highlight a part number. To make this work on every site, click **Allow on all sites** once in Settings.
+- **Typing:** an LCSC number (`C3235557`) or a manufacturer part number (`TPS2116DRLR`).
 
-**On any other page** highlight a part number. The panel searches it after a short pause. You can turn this off in Settings and use the **Search highlighted text** shortcut instead.
+A part number with several matches shows a list with stock, price, and package. The card then shows:
 
-Highlighting works on DigiKey, LCSC, and the page where you opened the finder. To make it work on every page, click **Allow on all sites** in Settings (or in the note under the search box). If highlighting cannot reach the finder on the current page, the note under the search box says so.
+- the LCSC number, a **LCSC verified** or **Community part** chip, and JLCPCB stock and price
+- **Symbol**, **Footprint**, and **3D** previews (keys 1, 2, 3)
+- **Checks**: who made the part, pin and pad counts, whether every pin has a pad, and whether a 3D model exists. Problems open the list automatically. A damaged file blocks Install.
+- editable MPN, manufacturer, package, and datasheet (empty fields are flagged)
+- the destination library, picked from the part's category
 
-**Typing** works too. Enter an LCSC number like `C3235557` or a manufacturer part number like `TPS2116DRLR`.
+Click **Install to KiCad** or press **Cmd+Enter** / **Ctrl+Enter**. The panel lists every file it wrote. A new library file needs a KiCad restart; later installs need only a library reload.
 
-When a part number matches several LCSC parts you get a list with stock, price, and package. Pick one. The card then shows:
+If EasyEDA has nothing usable, the panel links to Ultra Librarian, SnapMagic (SnapEDA), and Component Search Engine. They have no public API, so you download from them yourself (free accounts).
 
-- the MPN, manufacturer, package, and a stock and price badge from JLCPCB
-- **Symbol**, **Footprint**, and **3D** previews (keys 1, 2, 3 switch tabs)
-- editable metadata. Empty or uncertain fields are flagged amber so you can confirm them.
-- a **Destination library**, auto-picked from the part's category. You can always change it.
+### What "verified" means
 
-Click **Install to KiCad** or press **Cmd+Enter** / **Ctrl+Enter**. The panel lists every file it wrote. The first time a new library file is created you need to restart KiCad so it picks up the file. Later installs into the same library appear after a library reload in KiCad.
+EasyEDA marks each component with who uploaded it and whether LCSC checked it. LCSC's own parts are reliable for most uses. Community parts can be fine, but compare the pinout and land pattern with the datasheet before you order boards. The pin and pad check catches the most common mistake (a pin numbered differently from its pad) but cannot catch a wrong pad size.
 
-If EasyEDA has no data for a part, the panel links to SnapEDA, Component Search Engine, and Ultra Librarian so you can keep going.
+## Library layout
+
+Each destination is one library pair named `<Prefix>_<Bucket>`:
+
+| Bucket | Gets |
+|--------|------|
+| Power | regulators, PMICs, battery chargers |
+| Connector | headers, USB, terminal blocks |
+| Light | LEDs, displays, optocouplers |
+| Discrete | resistors, capacitors, diodes, transistors |
+| Switch | buttons, encoders, relays |
+| IC | everything else that is a chip |
+| Mechanical | standoffs, heatsinks, hardware |
+| KiCadPartFinder | catch-all, not prefixed |
+
+Symbols are appended and never duplicated. Footprints are overwritten by name. Each symbol's Footprint field is set to `<Prefix>_<Bucket>:<footprint>` so KiCad links them. STEP models are referenced as `${<path variable>}/3dmodels/<uuid>.step`.
 
 ## Open modes
 
-Settings lets you choose how the panel opens.
-
 | Mode | Best for | Notes |
 |------|----------|-------|
-| **Side panel** (default) | Chrome, Edge, Brave | Opens a tab instead on browsers without a side panel. The **Float** button moves the UI into an always-on-top window. |
-| **Floating window** | Arc | A separate small window that stays open while you switch tabs. |
-| **In-page overlay** | Working inside one page | A draggable, resizable panel on the page itself. Drag the header to move, drag the corner to resize, double-click the header to minimize. Press Escape to close. |
-
-The overlay runs inside a frame, which Chrome does not allow to write files. So when you grant a folder or install from the overlay, a small helper window opens, does the work, and closes itself. That is expected.
+| **Side panel** (default) | Chrome, Edge, Brave, Dia | Opens a tab where there is no side panel. **Float** pins it in an always-on-top window. |
+| **Floating window** | Arc | A small window that stays open across tabs. |
+| **In-page overlay** | Working in one page | Drag the header to move, the corner to resize. Escape closes it. A small helper window opens to write files, because a page frame cannot. |
 
 ## Keyboard shortcuts
 
-There are three kinds.
+| Action | Default (Mac / other) | Where |
+|--------|-----------------------|-------|
+| Open or close Part Finder | Cmd+Shift+K / Ctrl+Shift+K | anywhere |
+| Search highlighted text | Cmd+Shift+L / Ctrl+Shift+L | anywhere |
+| Install the current part | Alt+Shift+I | anywhere |
+| Install (panel focused) | Cmd+Enter / Ctrl+Enter | panel |
+| Focus search | / | panel |
+| Symbol, Footprint, 3D | 1, 2, 3 | panel |
+| Settings | Cmd+, / Ctrl+, | panel |
 
-**Browser shortcuts** work on any page, even when the panel is closed. Chrome manages them, so the extension can only show the current binding. To change one, open Settings and click **Change in Chrome**, or go to `chrome://extensions/shortcuts` directly (`edge://extensions/shortcuts` on Edge, `brave://extensions/shortcuts` on Brave).
-
-| Action | Default |
-|--------|---------|
-| Open or close Part Finder | Cmd+Shift+K / Ctrl+Shift+K |
-| Search highlighted text | Cmd+Shift+L / Ctrl+Shift+L |
-| Install the current part | Alt+Shift+I |
-
-Chrome silently drops a default that another extension already uses. The Settings list shows **Not set** when that happens.
-
-**Page shortcuts** do the same three jobs, but Part Finder listens for them itself on the page. They exist because Arc and Dia never pass extension shortcuts through. They use the same defaults, work wherever highlight-to-search works (DigiKey, LCSC, the page where you opened the finder, and everywhere once you allow all sites), and can be changed in Settings like panel shortcuts. Every page shortcut needs a modifier key so it cannot fire while you type.
-
-**Open or close** means what it says: the shortcut closes the finder when it is already in front. The side panel closes, the finder tab closes, and the floating window is minimized rather than closed so its folder connection survives. Press the shortcut again to bring it back.
-
-**Panel shortcuts** work while the panel is focused. You can change them in Settings: click a key, press the new combination, done. Press Escape to cancel or Backspace to unbind. They are stored in your Chrome profile and sync across machines.
-
-| Action | Default (Mac / other) |
-|--------|-----------------------|
-| Focus the search box | / |
-| Install the current part | Cmd+Enter / Ctrl+Enter |
-| Symbol, Footprint, 3D preview | 1, 2, 3 |
-| Open or close Settings | Cmd+, / Ctrl+, |
-| Close Settings, clear the search, or close the window | Escape |
-
-Single-key shortcuts pause while you are typing in a text field. Install always needs a modifier so it cannot fire by accident. Combos the browser reserves (Cmd+W, Ctrl+T, and so on) are refused with a reason.
-
-## Appearance
-
-The panel follows your system light or dark theme. Settings lets you pin it to one or the other.
+The first three are browser shortcuts; change them at `chrome://extensions/shortcuts`. Arc and Dia do not deliver browser shortcuts, so Part Finder also listens for the same keys on pages it may run on (page shortcuts). Panel and page shortcuts can be changed in **Settings › Keyboard shortcuts**.
 
 ## Troubleshooting
 
-**"Add your relay URL to search"**
-The relay is not set. Paste it in Settings and click **Test**.
+| You see | Do this |
+|---------|---------|
+| "Add your relay URL to search" | Paste the relay URL in Settings and click **Test**. |
+| Test says it is not the relay | On Vercel the URL must end in `/api`. On Cloudflare use the bare `workers.dev` address. |
+| "Relay works, but it is an older version" | Redeploy the relay (step 2). Search still works meanwhile. |
+| "JLCPCB refused the request for now" | Wait a minute, or paste the exact LCSC number, which goes to EasyEDA instead. |
+| Library pill says **Reconnect folder** | Click it once. Browsers drop folder access when the panel reloads, for example after a restart. |
+| Installed, but KiCad does not show it | Restart KiCad if a new library file was created; otherwise reload the library. Check the path variable in **Preferences › Configure Paths**. |
+| Shortcut does nothing in Arc or Dia | Use the toolbar icon once on that page, or **Allow on all sites** so page shortcuts work everywhere. |
+| No folder dialog in Arc's floating window | Click **Choose in a tab instead**. The window picks the folder up by itself. |
+| Overlay says the page blocks embedded panels | Click **Open in a window**, or use the side panel. |
 
-**Test says the address answered but is not the relay**
-On Vercel the endpoints live under `/api`, so the URL must end in `/api`. On Cloudflare use the bare `workers.dev` address.
+## Privacy
 
-**"Couldn't reach JLCPCB through your relay"**
-The relay is up but JLCPCB refused it, usually a temporary block. Wait a minute, or paste the exact LCSC number, which uses EasyEDA instead.
-
-**The Library pill says "Reconnect folder"**
-Chrome forgets folder grants whenever the panel's page is reloaded, for example after a browser restart. Click the pill once to re-allow it. The floating window keeps its grant as long as it stays open.
-
-**The shortcut does nothing (Arc, Dia)**
-Arc and Dia do not deliver extension shortcuts, even when they show them in their settings. Use the page shortcuts instead: they have the same defaults and work on any page Part Finder is allowed on. Click **Allow on all sites** in Settings once so they work everywhere. They cannot open the finder from a page it is not allowed on, such as a new tab page; click the toolbar icon there.
-
-**Highlighting text does nothing**
-The note under the search box tells you when the current page cannot reach the finder. Either open Part Finder from the toolbar icon on that page, or click **Allow on all sites** once. Chrome never allows extensions on its own pages (`chrome://`, the Web Store) or on PDFs.
-
-**No folder dialog appears (Arc floating window)**
-Arc's floating popup window does not show native folder dialogs or permission prompts. Click **Choose in a tab instead** (or **Open in a tab** in the message that appears). A normal tab opens, the dialog works there, and the floating window picks up the folder by itself. You can close the tab afterwards.
-
-**Installed, but KiCad does not show the part**
-If the install created a new library file, restart KiCad. Otherwise open the Symbol Editor or Footprint Editor and reload the library. Also confirm `${DAVID_KICAD_LIB}` points at your `kicad-libraries` folder in KiCad's path settings.
-
-**The overlay shows "This page blocks embedded panels"**
-Some sites forbid embedded frames. Click **Open in a window** or switch to the side panel mode.
-
-**Arc: the floating window disappears when I switch tabs**
-Use the **Floating window** open mode rather than the Float button. Arc drops always-on-top windows when the source tab is backgrounded.
-
-## Privacy and security
-
-- The extension only talks to your relay. The relay only talks to JLCPCB and EasyEDA. No data goes anywhere else.
-- The relay has no secrets and stores nothing.
-- Files are written only inside the folder you grant. KiCad's global tables and your project files are never touched.
-- Highlighted text is sent to your relay only when the panel is open and the highlight-to-search setting is on.
-- The panel renders every part name with `textContent`, never HTML, so a malicious part name cannot run code.
+- The extension talks only to your relay; the relay talks only to JLCPCB and EasyEDA.
+- Files are written only inside the folder you grant. KiCad settings and project files are never touched.
+- Highlighted text is sent only while the panel is open and highlight-to-search is on.
+- Part names from the network are rendered as text, never as HTML.
 
 ## Development
 
 ```bash
-pnpm install
-pnpm test               # unit tests for the extension and the relay
-pnpm dev:extension      # rebuild on change
-pnpm build:extension    # production build to packages/extension/dist
-pnpm --filter @kicad-part-finder/extension exec tsc --noEmit   # typecheck
+pnpm test                 # extension and relay unit tests
+```
+
+```bash
+pnpm build:extension      # production build to packages/extension/dist
+```
+
+```bash
+pnpm --filter @kicad-part-finder/extension exec tsc --noEmit
 ```
 
 ```
 packages/
   extension/   Chrome extension (Manifest V3, Vite, vitest)
-  relay/       Cloudflare Worker + Vercel edge function
-  shared/      Types shared across packages
+  relay/       Cloudflare Worker, also runs as a Vercel edge function
 ```
 
-See [packages/extension/README.md](packages/extension/README.md) for the extension's internals and [CLAUDE.md](CLAUDE.md) for the conventions contributors and AI tools should follow.
+[packages/extension/README.md](packages/extension/README.md) covers the internals; [CLAUDE.md](CLAUDE.md) lists the rules contributors and AI tools follow.
 
-## Uninstall
+## Credits and license
 
-Remove the extension from `chrome://extensions`. Your library folder and relay deployment are untouched. Delete the relay from your Cloudflare or Vercel dashboard if you no longer want it.
-
-## Credits
-
-The EasyEDA to KiCad converter is adapted from [hulryung/easyeda2kicad-web](https://github.com/hulryung/easyeda2kicad-web), itself inspired by [uPesy/easyeda2kicad.py](https://github.com/uPesy/easyeda2kicad.py). See [packages/extension/THIRD_PARTY.md](packages/extension/THIRD_PARTY.md).
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+The EasyEDA to KiCad converter is adapted from [hulryung/easyeda2kicad-web](https://github.com/hulryung/easyeda2kicad-web), itself based on [uPesy/easyeda2kicad.py](https://github.com/uPesy/easyeda2kicad.py). See [THIRD_PARTY.md](packages/extension/THIRD_PARTY.md). MIT license, see [LICENSE](LICENSE).

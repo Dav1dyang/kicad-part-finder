@@ -26,7 +26,7 @@ import {
   isAtom,
   isNode,
   type SNode,
-} from './preview-sexpr.js';
+} from '../lib/sexpr.js';
 import { SVG_NS, type Bbox, growBbox, emptyBbox, isFiniteBbox } from './preview-svg.js';
 
 /** Which board layer a graphic belongs to (only the ones we draw, distinctly). */

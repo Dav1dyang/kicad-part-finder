@@ -22,7 +22,7 @@ import {
   leadingNums,
   isAtom,
   type SNode,
-} from './preview-sexpr.js';
+} from '../lib/sexpr.js';
 import { SVG_NS, type Bbox, growBbox, emptyBbox, isFiniteBbox } from './preview-svg.js';
 
 /** A rectangle body graphic (mm, KiCad Y-up). */

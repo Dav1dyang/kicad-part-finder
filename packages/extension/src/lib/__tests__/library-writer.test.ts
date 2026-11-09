@@ -1,7 +1,7 @@
 /**
  * Unit tests for the PURE string helpers of the library writer.
  *
- * The FS-Access / IndexedDB layer (pickLibraryFolder, getSavedFolder,
+ * The FS-Access / IndexedDB layer (pickLibraryFolder, peekSavedFolder,
  * installPart) is browser-only and not exercised here; everything tested below
  * is deterministic and DOM/FS-free.
  */

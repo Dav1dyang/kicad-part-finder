@@ -4,7 +4,7 @@
  * The C-number in the URL is the primary key for the EasyEDA API.
  */
 
-import type { DetectedPart } from '@kicad-part-finder/shared';
+import type { DetectedPart } from '../lib/types.js';
 
 /** Extract LCSC C-number from the URL path */
 function extractLcscIdFromUrl(): string | null {

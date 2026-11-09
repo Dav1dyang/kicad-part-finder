@@ -4,7 +4,7 @@
  * so this is available immediately at document_idle.
  */
 
-import type { DetectedPart } from '@kicad-part-finder/shared';
+import type { DetectedPart } from '../lib/types.js';
 
 function extractPartFromJsonLd(): DetectedPart | null {
   const scripts = document.querySelectorAll('script[type="application/ld+json"]');

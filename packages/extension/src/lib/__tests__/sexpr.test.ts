@@ -10,7 +10,7 @@ import {
   leadingNums,
   isNode,
   isAtom,
-} from '../preview-sexpr.js';
+} from '../sexpr.js';
 
 describe('parseSexpr', () => {
   it('parses a nested list with bare atoms and quoted strings', () => {

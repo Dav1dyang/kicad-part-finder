@@ -257,12 +257,3 @@ export async function resolveMpnDetailed(
   }
   return { matches: [], matchedQuery: '', relaxed: false, diagnostic: firstDiagnostic };
 }
-
-/**
- * Search JLCPCB (via the relay) for an MPN and return all matches with an LCSC
- * id, best (most in-stock) first. Tries relaxed fallbacks for near-miss MPNs.
- * Returns [] on any error or no results.
- */
-export async function resolveMpnToLcsc(mpn: string, relayBase: string): Promise<JlcMatch[]> {
-  return (await resolveMpnDetailed(mpn, relayBase)).matches;
-}

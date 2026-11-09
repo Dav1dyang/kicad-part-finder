@@ -28,11 +28,22 @@
  * (CLOSE_SIDE_PANEL); the worker finds open panels with runtime.getContexts.
  */
 
-import type { DetectedPart } from '@kicad-part-finder/shared';
+import type { DetectedPart } from '../lib/types.js';
 import type { ConvertResult } from '../lib/converter/easyeda.js';
 import type { JlcMatch } from '../lib/jlcpcb.js';
 import { LIBRARY_CHOICES, categoryToBucket, type LibraryChoice } from '../lib/autosort.js';
 import {
+  DEFAULT_LIBRARY_CONFIG,
+  detectPrefix,
+  libraryNickname,
+  libraryTableRows,
+  normalizeLibraryConfig,
+  validatePathVar,
+  validatePrefix,
+  type LibraryConfig,
+} from '../lib/library-config.js';
+import {
+  inspectLibraryFolder,
   peekSavedFolder,
   pickLibraryFolder,
   requestFolderPermission,
@@ -41,6 +52,7 @@ import {
   type InstallPartResult,
 } from '../lib/library-writer.js';
 import { getSecondarySourceLinks } from '../lib/mpn-sources.js';
+import { verifyPart, type PartReport } from '../lib/verify-part.js';
 import { normalizeRelayUrl, prettyRelay, interpretRelayHealth } from '../lib/relay-url.js';
 import {
   PANEL_ACTIONS,
@@ -109,6 +121,12 @@ const relayTestBtnSetup = $<HTMLButtonElement>('relayTestBtnSetup');
 const relayNoteSetup = $('relayNoteSetup');
 const setupDoneBtn = $<HTMLButtonElement>('setupDoneBtn');
 
+const libPrefixInput = $<HTMLInputElement>('libPrefixInput');
+const libPathVarInput = $<HTMLInputElement>('libPathVarInput');
+const libConfigNote = $('libConfigNote');
+const copySymRowsBtn = $<HTMLButtonElement>('copySymRowsBtn');
+const copyFpRowsBtn = $<HTMLButtonElement>('copyFpRowsBtn');
+
 const relayUrlInput = $<HTMLInputElement>('relayUrlInput');
 const relayTestBtn = $<HTMLButtonElement>('relayTestBtn');
 const relayNote = $('relayNote');
@@ -143,9 +161,10 @@ const flagMpn = $('flagMpn');
 const flagDatasheet = $('flagDatasheet');
 const bucketSelect = $<HTMLSelectElement>('bucketSelect');
 const destPath = $('destPath');
-const symbolAvail = $('symbolAvail');
-const footprintAvail = $('footprintAvail');
-const model3dAvail = $('model3dAvail');
+const sourceBadge = $('sourceBadge');
+const checksEl = $<HTMLDetailsElement>('checks');
+const checksTitle = $('checksTitle');
+const checksList = $('checksList');
 const installBtn = $<HTMLButtonElement>('installBtn');
 const installBtnText = $('installBtnText');
 const installStatus = $('installStatus');
@@ -167,9 +186,12 @@ let savedHandle: FileSystemDirectoryHandle | null = null;
 /** Folder name when a handle exists but needs a click to re-grant. */
 let savedFolderName = '';
 let current: ConvertResult | null = null;
+/** Checks on `current`; a blocking report disables Install. */
+let currentReport: PartReport | null = null;
 let currentMatch: JlcMatch | null = null;
 let candidates: JlcMatch[] = [];
 let relayUrl = '';
+let libraryConfig: LibraryConfig = { ...DEFAULT_LIBRARY_CONFIG };
 /** Generation counter: any await in a search/convert checks it's still current. */
 let searchSeq = 0;
 let searchInFlight = false;
@@ -291,6 +313,9 @@ async function init() {
     });
   }
   relayTestBtn.addEventListener('click', () => void testRelay(relayNote, relayUrlInput));
+  for (const input of [libPrefixInput, libPathVarInput]) input.addEventListener('input', () => void onLibraryConfigInput());
+  copySymRowsBtn.addEventListener('click', () => void copyTableRows('symbols'));
+  copyFpRowsBtn.addEventListener('click', () => void copyTableRows('footprints'));
   relayTestBtnSetup.addEventListener('click', () => void testRelay(relayNoteSetup, relayUrlInputSetup));
   openModeSelector.addEventListener('change', (e) => {
     const target = e.target as HTMLInputElement;
@@ -341,8 +366,9 @@ async function init() {
 
   // Stored settings.
   try {
-    const stored = await chrome.storage.local.get(['relayUrl', 'openMode', 'theme', 'selectionSearch']);
+    const stored = await chrome.storage.local.get(['relayUrl', 'openMode', 'theme', 'selectionSearch', 'libraryConfig']);
     relayUrl = normalizeRelayUrl(typeof stored.relayUrl === 'string' ? stored.relayUrl : '').url;
+    libraryConfig = normalizeLibraryConfig(stored.libraryConfig);
     selectOpenMode(normalizeOpenMode(stored.openMode));
     applyTheme(normalizeTheme(stored.theme));
     selectionSearch = stored.selectionSearch !== false;
@@ -353,6 +379,14 @@ async function init() {
   relayUrlInput.value = relayUrl;
   relayUrlInputSetup.value = relayUrl;
   selectionSearchToggle.checked = selectionSearch;
+  applyLibraryConfig();
+  chrome.storage.onChanged.addListener((changes, area) => {
+    // Another finder document changed the library naming.
+    if (area === 'local' && changes.libraryConfig) {
+      libraryConfig = normalizeLibraryConfig(changes.libraryConfig.newValue);
+      applyLibraryConfig();
+    }
+  });
   void refreshAllSitesRow();
   await loadShortcuts();
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -1322,6 +1356,8 @@ async function adoptFolder(handle: FileSystemDirectoryHandle) {
     setupPinned = false;
     refreshReadiness();
     setStatus(searchStatus, `“${handle.name}” granted. Go back to the floating window; you can close this tab.`, 'success');
+  } else if (!runningInHelper) {
+    void checkFolderLooksRight(handle);
   }
   if (runningInHelper) {
     const closed = afterGrantInHelper(handle);
@@ -1434,6 +1470,94 @@ async function onLibraryAction(mode: 'pill' | 'pick') {
   }
 }
 
+// --- Library naming ---------------------------------------------------------------------
+
+/** Show the current naming in Settings and everywhere a library name appears. */
+function applyLibraryConfig() {
+  if (document.activeElement !== libPrefixInput) libPrefixInput.value = libraryConfig.prefix;
+  if (document.activeElement !== libPathVarInput) libPathVarInput.value = libraryConfig.pathVar;
+  for (const opt of bucketSelect.options) opt.textContent = bucketLabel(opt.value);
+  updateDestPath();
+  if (!libConfigNote.classList.contains('is-error')) {
+    setNote(libConfigNote, `Libraries: ${bucketLabel('IC')}, ${bucketLabel('Power')}, … Models: \${${libraryConfig.pathVar}}/3dmodels`, '');
+  }
+}
+
+/** Save valid edits as the user types; leave the field alone while it is invalid. */
+async function onLibraryConfigInput() {
+  const error = validatePrefix(libPrefixInput.value) ?? validatePathVar(libPathVarInput.value);
+  libPrefixInput.classList.toggle('is-invalid', validatePrefix(libPrefixInput.value) !== null);
+  libPathVarInput.classList.toggle('is-invalid', validatePathVar(libPathVarInput.value) !== null);
+  if (error) {
+    setNote(libConfigNote, error, 'error');
+    return;
+  }
+  setNote(libConfigNote, '', '');
+  await saveLibraryConfig(normalizeLibraryConfig({ prefix: libPrefixInput.value, pathVar: libPathVarInput.value }));
+}
+
+async function saveLibraryConfig(next: LibraryConfig) {
+  libraryConfig = next;
+  applyLibraryConfig();
+  rearmInstallButton();
+  try {
+    await chrome.storage.local.set({ libraryConfig });
+  } catch {
+    /* keep for this session */
+  }
+}
+
+async function copyTableRows(kind: 'symbols' | 'footprints') {
+  const rows = libraryTableRows(libraryConfig)[kind];
+  const btn = kind === 'symbols' ? copySymRowsBtn : copyFpRowsBtn;
+  const label = btn.textContent;
+  try {
+    await navigator.clipboard.writeText(`${rows}\n`);
+    btn.textContent = 'Copied';
+  } catch {
+    btn.textContent = 'Copy failed';
+  }
+  setTimeout(() => {
+    btn.textContent = label;
+  }, 1500);
+}
+
+/**
+ * After a folder is chosen, confirm it looks like a library root. Offer the
+ * prefix the folder already uses, so installs land in the existing libraries.
+ */
+async function checkFolderLooksRight(handle: FileSystemDirectoryHandle) {
+  const contents = await inspectLibraryFolder(handle);
+  const found = detectPrefix(contents.symbolFiles);
+  if (found && found !== libraryConfig.prefix) {
+    setStatus(
+      searchStatus,
+      `“${handle.name}” uses libraries named ${found}_…, but Part Finder is set to ${libraryConfig.prefix}_….`,
+      'info',
+      '',
+      {
+        label: `Use ${found}`,
+        run: () => {
+          void saveLibraryConfig({ ...libraryConfig, prefix: found });
+          setStatus(searchStatus, `Parts now install into ${found}_… libraries.`, 'success');
+        },
+      },
+    );
+    return;
+  }
+  if (!contents.hasSymbols && !contents.hasFootprints) {
+    setStatus(
+      searchStatus,
+      `“${handle.name}” has no symbols or footprints folder yet. Part Finder creates them on the first install. If this is the wrong folder, choose again.`,
+      'info',
+      '',
+      { label: 'Choose again', run: () => void onLibraryAction('pick') },
+    );
+    return;
+  }
+  setStatus(searchStatus, `“${handle.name}” is connected.`, 'success');
+}
+
 // --- Relay URL ------------------------------------------------------------------------
 
 /**
@@ -1482,7 +1606,9 @@ async function testRelay(note: HTMLElement, input: HTMLInputElement) {
     const resp = await fetch(`${url}/`, { signal: AbortSignal.timeout(8000), cache: 'no-store' });
     const body = await resp.text();
     const health = interpretRelayHealth(resp.status, body);
-    if (health.ok) setNote(note, 'Relay reachable. You can search now.', 'ok');
+    if (health.ok && health.outdated) {
+      setNote(note, 'Relay works, but it is an older version. Redeploy it from packages/relay to get every feature.', 'warn');
+    } else if (health.ok) setNote(note, 'Relay reachable. You can search now.', 'ok');
     else setNote(note, health.detail, 'error');
   } catch (err) {
     const timedOut = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
@@ -1490,7 +1616,7 @@ async function testRelay(note: HTMLElement, input: HTMLInputElement) {
   }
 }
 
-function setNote(el: HTMLElement, text: string, kind: '' | 'ok' | 'error' | 'checking') {
+function setNote(el: HTMLElement, text: string, kind: '' | 'ok' | 'warn' | 'error' | 'checking') {
   el.textContent = text;
   el.className = `field-note${kind ? ` is-${kind}` : ''}`;
 }
@@ -1602,6 +1728,7 @@ async function runSearch(rawQuery: string) {
   hide(secondarySources);
   preview?.reset();
   current = null;
+  currentReport = null;
   currentMatch = null;
   candidates = [];
   setupPinned = false;
@@ -1801,9 +1928,9 @@ function showCard(result: ConvertResult, match: JlcMatch | null) {
   bucketSelect.value = categoryToBucket(category);
   updateDestPath();
 
-  setAssetState(symbolAvail, /\(pin\s/.test(result.symbol) ? 'Ready' : 'No pins', /\(pin\s/.test(result.symbol));
-  setAssetState(footprintAvail, /\(pad\s/.test(result.footprint) ? 'Ready' : 'No pads', /\(pad\s/.test(result.footprint));
-  setAssetState(model3dAvail, result.model3dUrl ? 'STEP' : 'None', !!result.model3dUrl);
+  currentReport = verifyPart(result);
+  renderChecks(currentReport);
+  renderSourceBadge(result);
 
   preview?.setResult(result, relayUrl);
 
@@ -1814,6 +1941,44 @@ function showCard(result: ConvertResult, match: JlcMatch | null) {
   setInstallButton('idle');
   show(partCard);
   refreshReadiness();
+}
+
+function renderSourceBadge(result: ConvertResult) {
+  const { verified, official, author } = result.source;
+  sourceBadge.className = `source-badge ${verified ? 'is-verified' : 'is-community'}`;
+  sourceBadge.textContent = verified ? (official ? 'LCSC verified' : 'Verified') : 'Community part';
+  sourceBadge.title = verified
+    ? `Checked by LCSC. Made by ${author}.`
+    : `Uploaded by ${author}. LCSC has not checked it.`;
+  show(sourceBadge);
+}
+
+/** One summary line; the list opens by itself when something needs a look. */
+function renderChecks(report: PartReport) {
+  checksEl.className = `checks${report.level === 'ok' ? '' : ` is-${report.level}`}`;
+  const problems = report.checks.filter((c) => c.level === 'warn' || c.level === 'error');
+  setText(
+    checksTitle,
+    report.blocking
+      ? 'These files cannot be installed'
+      : problems.length
+        ? `${problems.length} thing${problems.length === 1 ? '' : 's'} to check`
+        : `All ${report.checks.length} checks passed`,
+  );
+  checksList.textContent = '';
+  for (const check of report.checks) {
+    const li = document.createElement('li');
+    li.className = `check is-${check.level}`;
+    li.append(check.message);
+    if (check.detail) {
+      const d = document.createElement('span');
+      d.className = 'check-detail';
+      d.textContent = check.detail;
+      li.appendChild(d);
+    }
+    checksList.appendChild(li);
+  }
+  checksEl.open = report.level !== 'ok';
 }
 
 function renderCardSub(manufacturer: string, pkg: string) {
@@ -1908,7 +2073,7 @@ function rearmInstallButton() {
 }
 
 async function onInstall() {
-  if (!current || !hasRelay() || installInFlight) return;
+  if (!current || !hasRelay() || installInFlight || currentReport?.blocking) return;
   if (detectDebounce) {
     clearTimeout(detectDebounce);
     detectDebounce = null;
@@ -1965,6 +2130,7 @@ async function onInstall() {
       package: fieldPackage.value.trim(),
       datasheet: fieldDatasheet.value.trim(),
     },
+    library: libraryConfig,
   };
 
   installInFlight = true;
@@ -2002,7 +2168,7 @@ async function onInstall() {
 }
 
 function bucketLabel(bucket: string): string {
-  return bucket === 'KiCadPartFinder' ? 'KiCadPartFinder' : `DavidLib_${bucket}`;
+  return libraryNickname(bucket, libraryConfig);
 }
 
 function failInstall(msg: string) {
@@ -2022,6 +2188,7 @@ function renderWritten(paths: string[]) {
 function resetForAnother() {
   searchSeq++;
   current = null;
+  currentReport = null;
   currentMatch = null;
   candidates = [];
   preview?.reset();
@@ -2074,8 +2241,11 @@ function createSourceLink(link: { name: string; url: string; description: string
 
 function refreshInstallEnabled() {
   if (installBtn.classList.contains('is-done') || installBtn.classList.contains('is-busy')) return;
-  installBtn.disabled = !(hasFolder() && current && hasRelay());
-  installBtn.title = !hasRelay()
+  const blocked = currentReport?.blocking === true;
+  installBtn.disabled = !(hasFolder() && current && hasRelay()) || blocked;
+  installBtn.title = blocked
+    ? 'The converted files are damaged. Search again or use another source.'
+    : !hasRelay()
     ? 'Add your relay URL first.'
     : hasFolder()
       ? ''
@@ -2087,13 +2257,6 @@ function refreshInstallEnabled() {
 function toggleFlag(flag: HTMLElement, input: HTMLInputElement, missing: boolean) {
   flag.classList.toggle('hidden', !missing);
   input.classList.toggle('needs-confirm', missing);
-}
-
-function setAssetState(element: HTMLElement, label: string, available: boolean) {
-  const stateEl = element.querySelector('.asset-state')!;
-  stateEl.textContent = label;
-  element.classList.toggle('is-ready', available);
-  element.classList.toggle('is-off', !available);
 }
 
 type StatusKind = 'success' | 'error' | 'loading' | 'info';

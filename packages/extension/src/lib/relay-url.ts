@@ -52,21 +52,37 @@ export function prettyRelay(url: string): string {
   }
 }
 
-/** The text the relay's root endpoint returns when it's healthy. */
+/** The text the relay's root endpoint starts with when it is healthy. */
 export const RELAY_HEALTH_TEXT = 'kicad-part-relay ok';
 
+/**
+ * The relay version this extension is built for (see RELAY_VERSION in
+ * packages/relay). An older relay still searches and installs, but misses
+ * newer endpoints, so the panel asks the user to redeploy it.
+ */
+export const REQUIRED_RELAY_VERSION = 2;
+
 export type RelayHealth =
-  | { ok: true }
-  | { ok: false; reason: 'unreachable' | 'not-a-relay' | 'http-error'; detail: string };
+  | { ok: true; version: number; outdated: boolean }
+  | { ok: false; reason: 'not-a-relay' | 'http-error'; detail: string };
+
+/** Read `v<n>` from the health text. Relays before versioning say nothing: v1. */
+export function parseRelayVersion(body: string): number {
+  const m = body.match(/kicad-part-relay ok v(\d+)/i);
+  return m ? Number(m[1]) : 1;
+}
 
 /**
- * Interpret a health-check response. A healthy relay answers 200 with the
- * `kicad-part-relay ok` text; anything else is classified so the UI can give
- * one clear next step.
+ * Interpret a health-check response. A healthy relay answers 200 with
+ * `kicad-part-relay ok v<version>`; anything else is classified so the UI can
+ * give one clear next step.
  */
 export function interpretRelayHealth(status: number, body: string): RelayHealth {
   if (status >= 200 && status < 300) {
-    if (body.toLowerCase().includes('kicad-part-relay')) return { ok: true };
+    if (body.toLowerCase().includes('kicad-part-relay')) {
+      const version = parseRelayVersion(body);
+      return { ok: true, version, outdated: version < REQUIRED_RELAY_VERSION };
+    }
     return { ok: false, reason: 'not-a-relay', detail: 'The address answered, but it is not the relay. Check the path (Vercel deployments end in /api).' };
   }
   return { ok: false, reason: 'http-error', detail: `The relay answered HTTP ${status}.` };

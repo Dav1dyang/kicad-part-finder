@@ -1,30 +1,23 @@
 /**
- * File System Access library writer — the core new capability of the self-
- * contained extension.
+ * Writes parts into the user's KiCad library folder with the File System
+ * Access API.
  *
- * The user grants a single directory handle (their KiCad library root, e.g.
- * `~/Documents/GitHub/kicad-libraries`). Everything we write lives INSIDE that
- * folder; we never touch KiCad's global `sym-lib-table` / `fp-lib-table` (the
- * one-time `tools/setup` already registered the `DavidLib_<bucket>` and
- * `KiCadPartFinder` nicknames against `${DAVID_KICAD_LIB}`).
+ * The user grants one folder (their library root). Everything is written
+ * inside it; KiCad's global `sym-lib-table` / `fp-lib-table` are never
+ * touched. Layout, with `<lib>` = `<prefix>_<Bucket>` (see library-config.ts):
+ *   symbols/<lib>.kicad_sym              one file per library, append + dedupe
+ *   footprints/<lib>.pretty/<fp>.kicad_mod
+ *   3dmodels/<uuid>.step                 referenced as ${<pathVar>}/3dmodels/…
  *
- * Layout inside the granted folder:
- *   symbols/DavidLib_<bucket>.kicad_sym
- *   footprints/DavidLib_<bucket>.pretty/<fpname>.kicad_mod
- *   3dmodels/<uuid>.step
- *
- * The pure string helpers (mergeSymbolLibrary / extractSymbolName /
- * extractFootprintName / setFootprintModel) are exported separately so they can
- * be unit-tested with no DOM or FS.
+ * The string helpers are pure and unit-tested in __tests__/library-writer.test.ts.
  */
+
+import { DEFAULT_LIBRARY_CONFIG, libraryNickname, modelPath, type LibraryConfig } from './library-config.js';
 
 /** Deadline for the STEP download (models can be several MB). */
 const MODEL_TIMEOUT_MS = 60_000;
 
-/** KiCad path-substitution var the lib tables resolve to the granted folder. */
-const KICAD_LIB_VAR = '${DAVID_KICAD_LIB}';
-
-/** Wrapper emitted when a `DavidLib_<bucket>.kicad_sym` file doesn't yet exist. */
+/** Wrapper emitted when a library's `.kicad_sym` file doesn't exist yet. */
 const SYM_LIB_HEADER = '(kicad_symbol_lib (version 20211014) (generator easyeda2kicad)';
 
 // ---------------------------------------------------------------------------
@@ -326,7 +319,7 @@ export function extractFootprintName(footprintText: string): string {
 
 /**
  * Ensure a footprint's `.kicad_mod` text references a 3D model at
- * `${DAVID_KICAD_LIB}/3dmodels/<fileName>`.
+ * `${<pathVar>}/3dmodels/<fileName>`.
  *
  * The converter emits footprints WITHOUT a `(model …)` line, so normally we
  * INSERT one just before the footprint's final `)`. If a `(model …)` line is
@@ -334,10 +327,14 @@ export function extractFootprintName(footprintText: string): string {
  *
  * Pure — returns the new text.
  */
-export function setFootprintModel(footprintText: string, fileName: string): string {
-  const modelPath = `${KICAD_LIB_VAR}/3dmodels/${fileName}`;
+export function setFootprintModel(
+  footprintText: string,
+  fileName: string,
+  config: LibraryConfig = DEFAULT_LIBRARY_CONFIG,
+): string {
+  const path = modelPath(fileName, config);
   const modelBlock =
-    `  (model "${modelPath}"\n` +
+    `  (model "${path}"\n` +
     '    (offset (xyz 0 0 0))\n' +
     '    (scale (xyz 1 1 1))\n' +
     '    (rotate (xyz 0 0 0))\n' +
@@ -345,7 +342,7 @@ export function setFootprintModel(footprintText: string, fileName: string): stri
 
   // If a (model "…") line is already present, rewrite just its path in place.
   if (/\(model\s+"/.test(footprintText)) {
-    return footprintText.replace(/\(model\s+"[^"]*"/, `(model "${modelPath}"`);
+    return footprintText.replace(/\(model\s+"[^"]*"/, `(model "${path}"`);
   }
 
   // Otherwise insert a fresh (model …) block before the footprint's final ')'.
@@ -525,20 +522,6 @@ async function idbSet(key: string, value: unknown): Promise<void> {
   }
 }
 
-async function idbDelete(key: string): Promise<void> {
-  const db = await openDb();
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(IDB_STORE, 'readwrite');
-      tx.objectStore(IDB_STORE).delete(key);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-  } finally {
-    db.close();
-  }
-}
-
 /**
  * Prompt the user to pick their KiCad library root folder (read-write) and
  * persist the handle in IndexedDB for next session. Must be called from a user
@@ -560,25 +543,6 @@ export async function pickLibraryFolder(): Promise<FileSystemDirectoryHandle> {
   });
   await idbSet(HANDLE_KEY, handle);
   return handle;
-}
-
-/**
- * Re-load the previously granted folder handle and (re-)request read-write
- * permission. Chrome forgets the *active* grant between sessions, so this must
- * run from a user gesture; it returns null if no handle was ever stored or the
- * user declines permission.
- */
-export async function getSavedFolder(): Promise<FileSystemDirectoryHandle | null> {
-  const handle = await idbGet<FileSystemDirectoryHandle>(HANDLE_KEY);
-  if (!handle) return null;
-
-  const opts = { mode: 'readwrite' as const };
-  // queryPermission first to avoid an unnecessary prompt if already granted.
-  const query = await (handle as any).queryPermission(opts);
-  if (query === 'granted') return handle;
-
-  const request = await (handle as any).requestPermission(opts);
-  return request === 'granted' ? handle : null;
 }
 
 /** The saved folder handle and whether it can be used right now. */
@@ -623,9 +587,32 @@ export async function requestFolderPermission(handle: FileSystemDirectoryHandle)
   }
 }
 
-/** Forget the stored folder handle (used by a "change folder" affordance). */
-export async function clearSavedFolder(): Promise<void> {
-  await idbDelete(HANDLE_KEY);
+/** What a chosen folder already holds, to confirm it is a library root. */
+export interface FolderContents {
+  hasSymbols: boolean;
+  hasFootprints: boolean;
+  /** File names in `symbols/`, for prefix detection. */
+  symbolFiles: string[];
+}
+
+/** Look inside a granted folder without changing it. Never throws. */
+export async function inspectLibraryFolder(root: FileSystemDirectoryHandle): Promise<FolderContents> {
+  const out: FolderContents = { hasSymbols: false, hasFootprints: false, symbolFiles: [] };
+  try {
+    for await (const [name, entry] of (root as unknown as AsyncIterable<[string, FileSystemHandle]>)) {
+      if (entry.kind !== 'directory') continue;
+      if (name === 'footprints') out.hasFootprints = true;
+      if (name === 'symbols') {
+        out.hasSymbols = true;
+        for await (const [file, child] of (entry as unknown as AsyncIterable<[string, FileSystemHandle]>)) {
+          if (child.kind === 'file' && file.endsWith('.kicad_sym')) out.symbolFiles.push(file);
+        }
+      }
+    }
+  } catch {
+    /* unreadable: report what we saw */
+  }
+  return out;
 }
 
 /** Get (creating if missing) a subdirectory handle by path segment. */
@@ -672,6 +659,8 @@ export interface InstallPartInput {
   footprint: string;
   model3dUrl: string | null;
   meta: { lcsc: string; mpn: string; manufacturer: string; datasheet: string; package: string; description: string };
+  /** Library naming. Defaults to DEFAULT_LIBRARY_CONFIG. */
+  library?: LibraryConfig;
 }
 
 /** What `installPart` wrote (or skipped). */
@@ -701,8 +690,8 @@ async function withLock<T>(name: string, fn: () => Promise<T>): Promise<T> {
  * Install a converted part into the granted KiCad library folder.
  *
  * Writes/updates:
- *   symbols/DavidLib_<bucket>.kicad_sym       (append + dedupe)
- *   footprints/DavidLib_<bucket>.pretty/<fp>.kicad_mod
+ *   symbols/<lib>.kicad_sym       (append + dedupe)
+ *   footprints/<lib>.pretty/<fp>.kicad_mod
  *   3dmodels/<uuid>.step                      (best-effort)
  *
  * The 3D model is best-effort: if the fetch fails the footprint is still written
@@ -729,9 +718,8 @@ export async function installPart(
     errors: [],
   };
 
-  const bucket = input.bucket;
-  // KiCadPartFinder is a bare nickname; the seven buckets are DavidLib_<bucket>.
-  const libNick = bucket === 'KiCadPartFinder' ? 'KiCadPartFinder' : `DavidLib_${bucket}`;
+  const library = input.library ?? DEFAULT_LIBRARY_CONFIG;
+  const libNick = libraryNickname(input.bucket, library);
   const symLibName = `${libNick}.kicad_sym`;
   const prettyName = `${libNick}.pretty`;
 
@@ -740,7 +728,7 @@ export async function installPart(
   let footprintText = setFootprintName(input.footprint, result.footprintName);
 
   // Apply the card's edits (MPN, manufacturer, package, datasheet), then
-  // qualify the symbol's Footprint field as `DavidLib_<bucket>:<fpName>` so
+  // qualify the symbol's Footprint field as `<lib>:<fpName>` so
   // KiCad links symbol -> footprint automatically.
   const footprintRef = `${libNick}:${result.footprintName}`;
   const symbolText = setSymbolFootprintRef(applySymbolMeta(input.symbol, input.meta), footprintRef);
@@ -766,7 +754,7 @@ export async function installPart(
           } else {
             const modelsDir = await getDir(root, '3dmodels');
             await writeFileText(modelsDir, dl.fileName, bytes);
-            footprintText = setFootprintModel(footprintText, dl.fileName);
+            footprintText = setFootprintModel(footprintText, dl.fileName, library);
             result.written.push(`3dmodels/${dl.fileName}`);
             result.modelStatus = 'ok';
           }

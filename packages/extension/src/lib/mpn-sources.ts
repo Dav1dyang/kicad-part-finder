@@ -1,9 +1,8 @@
 /**
- * Generate search URLs for secondary component sources.
- * These don't have APIs — we just link the user to the search page.
+ * Other places to get a symbol and footprint when EasyEDA has nothing usable.
+ * None of them offers a public API, so these are search links the user opens.
+ * Each one publishes native KiCad files and needs a free account to download.
  */
-
-import { SECONDARY_SOURCES } from '@kicad-part-finder/shared';
 
 export interface SourceLink {
   name: string;
@@ -12,21 +11,22 @@ export interface SourceLink {
 }
 
 export function getSecondarySourceLinks(mpn: string): SourceLink[] {
+  const q = encodeURIComponent(mpn.trim());
   return [
     {
-      name: 'SnapEDA',
-      url: SECONDARY_SOURCES.snapeda(mpn),
-      description: 'Native KiCad files, free download',
+      name: 'Ultra Librarian',
+      url: `https://app.ultralibrarian.com/search?q=${q}`,
+      description: 'Often made with the manufacturer. Free account.',
+    },
+    {
+      name: 'SnapMagic (SnapEDA)',
+      url: `https://www.snapeda.com/search/?q=${q}&search-type=parts`,
+      description: 'KiCad files with a quality check. Free account.',
     },
     {
       name: 'Component Search Engine',
-      url: SECONDARY_SOURCES.componentSearchEngine(mpn),
-      description: 'SamacSys library, free account required',
-    },
-    {
-      name: 'Ultra Librarian',
-      url: SECONDARY_SOURCES.ultraLibrarian(mpn),
-      description: 'Verified symbols & footprints',
+      url: `https://componentsearchengine.com/part-view/${q}`,
+      description: 'SamacSys models, also behind Mouser. Free account.',
     },
   ];
 }

@@ -29,7 +29,7 @@
  * tab active), otherwise it opens or focuses it.
  */
 
-import type { DetectedPart } from '@kicad-part-finder/shared';
+import type { DetectedPart } from '../lib/types.js';
 import { convertLcsc } from '../lib/converter/easyeda.js';
 import { resolveMpnDetailed } from '../lib/jlcpcb.js';
 
@@ -273,6 +273,32 @@ async function sidePanelWindowIds(): Promise<Set<number>> {
   return ids;
 }
 
+/**
+ * Chrome 141 added sidePanel.close() and open/close events; @types/chrome here
+ * predates them, so they are typed by hand and feature-detected.
+ */
+interface SidePanelExtras {
+  close?: (options: { windowId?: number; tabId?: number }) => Promise<void>;
+  onOpened?: chrome.events.Event<(info: { windowId: number }) => void>;
+  onClosed?: chrome.events.Event<(info: { windowId: number }) => void>;
+}
+const sidePanelExtras = (chrome.sidePanel ?? {}) as SidePanelExtras;
+
+/**
+ * Windows showing our panel, kept current by the open/close events. Lets the
+ * open-finder toggle decide without an await, so chrome.sidePanel.open() still
+ * runs inside the user gesture. A restarted worker re-seeds from getContexts;
+ * until that lands the panel counts as closed, and opening an open panel is a
+ * harmless no-op.
+ */
+const openPanelWindows = new Set<number>();
+const panelEventsLive = Boolean(sidePanelExtras.onOpened && sidePanelExtras.onClosed);
+if (panelEventsLive) {
+  sidePanelExtras.onOpened!.addListener((info) => openPanelWindows.add(info.windowId));
+  sidePanelExtras.onClosed!.addListener((info) => openPanelWindows.delete(info.windowId));
+  void sidePanelWindowIds().then((ids) => ids.forEach((id) => openPanelWindows.add(id)));
+}
+
 // --- Command dedupe ----------------------------------------------------------
 
 const lastCommandAt = new Map<string, number>();
@@ -505,7 +531,14 @@ async function openFinder(tab: chrome.tabs.Tab | undefined, toggle: boolean): Pr
       sidePanelSupportedCache !== null ? sidePanelSupportedCache : await isSidePanelSupported();
     if (supported) {
       const windowId = tab?.windowId;
-      if (toggle && typeof windowId === 'number' && (await sidePanelWindowIds()).has(windowId)) {
+      // No await on the events path: open() below must stay inside the gesture.
+      const isOpen =
+        toggle && typeof windowId === 'number'
+          ? panelEventsLive
+            ? openPanelWindows.has(windowId)
+            : (await sidePanelWindowIds()).has(windowId)
+          : false;
+      if (isOpen && typeof windowId === 'number') {
         await closeSidePanel(windowId);
         return;
       }
@@ -541,7 +574,8 @@ async function hideFinderWindowIfFocused(): Promise<boolean> {
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
- * Close the side panel in a window. Chrome has no close() call. The panel
+ * Close the side panel in a window. Chrome 141+ (and Chromium browsers built
+ * on it, such as Dia) have sidePanel.close(). Before that, the panel
  * document closes itself on request; if it is still there a beat later,
  * disabling the panel closes it, and re-enabling lets the next open work.
  * That disable is global (per-tab options would turn the panel tab-scoped
@@ -549,6 +583,15 @@ const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * window showing the panel.
  */
 async function closeSidePanel(windowId: number): Promise<void> {
+  if (sidePanelExtras.close) {
+    try {
+      await sidePanelExtras.close({ windowId });
+      openPanelWindows.delete(windowId);
+      return;
+    } catch {
+      /* fall through to the older route */
+    }
+  }
   broadcast({ type: 'CLOSE_SIDE_PANEL', windowId });
   await delay(300);
   const open = await sidePanelWindowIds();
