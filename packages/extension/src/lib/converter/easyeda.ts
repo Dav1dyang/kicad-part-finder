@@ -185,23 +185,23 @@ export async function fetchEasyedaComponent(
     });
   } catch (err) {
     if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
-      throw new Error(`The relay took too long to answer for ${lcscId}. Check the relay URL and try again.`);
+      throw new Error(`The relay timed out on ${lcscId}. Try again.`);
     }
-    throw new Error(`Could not reach the relay for ${lcscId}. Check the relay URL and your connection.`);
+    throw new Error(`Cannot reach the relay. Check its URL and your connection.`);
   }
 
   if (!resp.ok) {
-    throw new Error(`EasyEDA request failed for ${lcscId}: HTTP ${resp.status} ${resp.statusText}`);
+    throw new Error(`EasyEDA error ${resp.status} for ${lcscId}. Try again in a minute.`);
   }
 
   let data: { success?: boolean; result?: EasyedaResult };
   try {
     data = (await resp.json()) as { success?: boolean; result?: EasyedaResult };
   } catch {
-    throw new Error(`The relay returned something that is not JSON for ${lcscId}. Is the relay URL correct?`);
+    throw new Error(`The relay sent a web page, not data. Check its URL.`);
   }
   if (!data.success || !data.result) {
-    throw new Error(`EasyEDA has no data for ${lcscId}. Try one of the other sources below.`);
+    throw new Error(`EasyEDA has no data for ${lcscId}. Try a source below.`);
   }
 
   return data.result;

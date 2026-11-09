@@ -528,7 +528,7 @@ function onRuntimeMessage(message: any, sender: chrome.runtime.MessageSender): v
           rearmInstallButton();
           setStatus(searchStatus, `“${folderName()}” is connected.`, 'success');
         } else if (folderPermission === 'prompt') {
-          setStatus(searchStatus, `“${savedFolderName}” was chosen. Click the Library pill once to use it here.`, 'info');
+          setStatus(searchStatus, `“${savedFolderName}” chosen. Click Library once to use it here.`, 'info');
         }
       });
     }
@@ -543,7 +543,7 @@ function onRuntimeMessage(message: any, sender: chrome.runtime.MessageSender): v
   } else if (message.type === 'OVERLAY_FOLDER_DISMISSED') {
     pickFolderInFlight = false;
     libPill.disabled = false;
-    setStatus(searchStatus, 'Folder access was not granted. Click Library to try again.', 'error');
+    setStatus(searchStatus, 'Folder access denied. Click Library to retry.', 'error');
   } else if (message.type === 'OVERLAY_INSTALLED') {
     clearOverlayWatchdog();
     installInFlight = false;
@@ -627,8 +627,8 @@ async function refreshSelectionHint(): Promise<void> {
   setText(
     selectionHintText,
     allSites
-      ? 'Highlight-to-search is not available on this page.'
-      : 'Highlight-to-search is off on this page. Open Part Finder from the toolbar icon there, or',
+      ? 'Highlight search does not work on this page.'
+      : 'Highlight search is off here. Open Part Finder from the toolbar on this page, or',
   );
   selectionAllowBtn.classList.toggle('hidden', allSites);
   show(selectionHint);
@@ -644,7 +644,7 @@ async function allowAllSitesForThisPage(): Promise<void> {
   }
   void refreshAllSitesRow();
   if (!granted) {
-    setStatus(searchStatus, 'Not allowed. Highlight-to-search keeps working on the page where you open the finder.', 'info');
+    setStatus(searchStatus, 'Not allowed. Highlight search still works on the page you open Part Finder from.', 'info');
     return;
   }
   const tabId = sourceTabId ?? myActiveTabId;
@@ -690,7 +690,7 @@ function markOverlayInstallFailed(needsFolder: boolean, error: string) {
   setStatus(
     installStatus,
     needsFolder
-      ? 'Grant your library folder in the small window that opened. The install continues there.'
+      ? 'Allow your folder in the small window. The install finishes there.'
       : error || 'Install failed. Try again.',
     'error',
   );
@@ -699,7 +699,7 @@ function markOverlayInstallFailed(needsFolder: boolean, error: string) {
 function runFolderGrantHelper() {
   setupPinned = true;
   refreshReadiness();
-  setStatus(searchStatus, 'Choose your KiCad library folder to finish. This window closes by itself.', 'info');
+  setStatus(searchStatus, 'Choose your library folder. This window then closes.', 'info');
   chooseFolderBtn.focus();
 }
 
@@ -726,7 +726,7 @@ async function runAutoInstallHelper(lcscId: string) {
 
   if (!libraryFolder) {
     libPill.focus();
-    setStatus(installStatus, 'Click the Library pill to confirm your folder. The part installs right after.', 'info');
+    setStatus(installStatus, 'Click Library to confirm your folder. The part installs right after.', 'info');
     void notifyOverlay('needs-folder');
     return;
   }
@@ -804,7 +804,7 @@ async function onToggleFloat() {
       onEnter: (pipWindow) => {
         floatingNote.classList.remove('hidden');
         floatBtn.classList.add('is-active');
-        floatBtn.title = 'Return from the floating window';
+        floatBtn.title = 'Back to the side panel';
         setText(floatBtn.querySelector('.icon-label'), 'Floating');
         bindKeys(pipWindow.document);
         pipWindow.document.addEventListener('visibilitychange', () => preview?.refresh());
@@ -814,7 +814,7 @@ async function onToggleFloat() {
         floatHandle = null;
         floatingNote.classList.add('hidden');
         floatBtn.classList.remove('is-active');
-        floatBtn.title = 'Float on top in an always-on-top window';
+        floatBtn.title = 'Keep on top of other windows';
         setText(floatBtn.querySelector('.icon-label'), 'Float');
         bindKeys(document);
         preview?.refresh();
@@ -823,7 +823,7 @@ async function onToggleFloat() {
   } catch {
     floatHandle = null;
     floatBtn.classList.add('hidden');
-    setStatus(searchStatus, 'Floating needs a normal browser tab. Open the finder in a tab to float it.', 'error');
+    setStatus(searchStatus, 'Float needs a normal tab. Open Part Finder in a tab first.', 'error');
   }
 }
 
@@ -922,7 +922,7 @@ async function refreshAllSitesRow() {
 async function requestAllSites() {
   try {
     const granted = await chrome.permissions.request({ origins: ['https://*/*', 'http://*/*'] });
-    if (!granted) setStatus(searchStatus, 'Not allowed. Highlight-to-search keeps working on the page where you open the finder.', 'info');
+    if (!granted) setStatus(searchStatus, 'Not allowed. Highlight search still works on the page you open Part Finder from.', 'info');
   } catch {
     /* the request needs a click; ignore */
   }
@@ -1017,14 +1017,14 @@ async function renderBrowserShortcuts() {
     keys.className = 'keys';
     const caps = browserShortcutToKeyCaps(cmd.shortcut);
     renderCaps(keys, caps, 'Not set');
-    if (!caps.length) desc.textContent = 'Not set in the browser. The page shortcut below still works.';
+    if (!caps.length) desc.textContent = 'Not set. The page shortcut still works.';
     const change = document.createElement('button');
     change.type = 'button';
     change.className = 'link-btn';
     change.textContent = caps.length ? 'Change in Chrome' : 'Set in Chrome';
     change.addEventListener('click', () => {
       void chrome.tabs.create({ url: shortcutsPage }).catch(() => {
-        setStatus(searchStatus, `Open ${shortcutsPage} in a new tab to change browser shortcuts.`, 'info');
+        setStatus(searchStatus, `Open ${shortcutsPage} to change it.`, 'info');
       });
     });
     row.appendChild(name);
@@ -1199,7 +1199,7 @@ function onKeyDown(e: KeyboardEvent) {
         ? validatePageCombo(text, action as PageAction, pageShortcuts, panelShortcuts)
         : validateCombo(text, action as PanelAction, panelShortcuts, pageShortcuts);
     if (!check.ok) {
-      showShortcutError(btn, check.reason ?? 'That shortcut cannot be used.');
+      showShortcutError(btn, check.reason ?? 'That shortcut is not allowed.');
       renderCaps(btn, [], 'Press keys…');
       return;
     }
@@ -1355,7 +1355,7 @@ async function adoptFolder(handle: FileSystemDirectoryHandle) {
   if (runningInGrantTab) {
     setupPinned = false;
     refreshReadiness();
-    setStatus(searchStatus, `“${handle.name}” granted. Go back to the floating window; you can close this tab.`, 'success');
+    setStatus(searchStatus, `“${handle.name}” connected. You can close this tab.`, 'success');
   } else if (!runningInHelper) {
     void checkFolderLooksRight(handle);
   }
@@ -1373,7 +1373,7 @@ function openFinderInTab() {
   const base = chrome.runtime.getURL('src/sidepanel/index.html');
   const url = `${base}?grant=1${sourceTabId !== null ? `&tab=${sourceTabId}` : ''}`;
   void chrome.tabs.create({ url }).catch(() => {
-    setStatus(searchStatus, 'Could not open a tab. Open the finder from the toolbar in a normal window.', 'error');
+    setStatus(searchStatus, 'Could not open a tab. Use the toolbar icon in a normal window.', 'error');
   });
 }
 
@@ -1387,7 +1387,7 @@ async function onLibraryAction(mode: 'pill' | 'pick') {
     if (pickFolderInFlight) return;
     pickFolderInFlight = true;
     libPill.disabled = true;
-    setStatus(searchStatus, 'A small window is opening so you can grant your library folder…', 'info');
+    setStatus(searchStatus, 'Opening a small window to choose your folder…', 'info');
     try {
       const resp = await chrome.runtime.sendMessage({ type: 'OVERLAY_PICK_FOLDER' });
       if (!resp?.ok) throw new Error(resp?.error || 'Could not open the window.');
@@ -1407,7 +1407,7 @@ async function onLibraryAction(mode: 'pill' | 'pick') {
     const silent = setTimeout(() => {
       setStatus(
         searchStatus,
-        'No permission prompt? This window may not show one. Choose the folder in a tab instead.',
+        'No prompt? This window may hide it. Use a tab instead.',
         'info',
         '',
         { label: 'Open in a tab', run: openFinderInTab },
@@ -1424,7 +1424,7 @@ async function onLibraryAction(mode: 'pill' | 'pick') {
     refreshReadiness();
     setStatus(
       searchStatus,
-      `Chrome did not re-allow “${savedFolderName}”. Choose the folder again below.`,
+      `“${savedFolderName}” was not allowed. Choose it again below.`,
       'error',
       '',
       { label: 'Open in a tab', run: openFinderInTab },
@@ -1436,7 +1436,7 @@ async function onLibraryAction(mode: 'pill' | 'pick') {
   const silent = setTimeout(() => {
     setStatus(
       searchStatus,
-      'No folder dialog? This window may not show one. Choose the folder in a tab instead.',
+      'No folder dialog? This window may hide it. Use a tab instead.',
       'info',
       '',
       { label: 'Open in a tab', run: openFinderInTab },
@@ -1459,7 +1459,7 @@ async function onLibraryAction(mode: 'pill' | 'pick') {
     if (noPicker) {
       setStatus(
         searchStatus,
-        'This window cannot open the folder picker. Open the finder in a normal tab and choose the folder there.',
+        'This window cannot show the folder picker. Use a tab instead.',
         'error',
         msg,
         { label: 'Open in a tab', run: openFinderInTab },
@@ -1532,14 +1532,14 @@ async function checkFolderLooksRight(handle: FileSystemDirectoryHandle) {
   if (found && found !== libraryConfig.prefix) {
     setStatus(
       searchStatus,
-      `“${handle.name}” uses libraries named ${found}_…, but Part Finder is set to ${libraryConfig.prefix}_….`,
+      `“${handle.name}” uses ${found}_… libraries, not ${libraryConfig.prefix}_….`,
       'info',
       '',
       {
         label: `Use ${found}`,
         run: () => {
           void saveLibraryConfig({ ...libraryConfig, prefix: found });
-          setStatus(searchStatus, `Parts now install into ${found}_… libraries.`, 'success');
+          setStatus(searchStatus, `Now installing into ${found}_… libraries.`, 'success');
         },
       },
     );
@@ -1548,7 +1548,7 @@ async function checkFolderLooksRight(handle: FileSystemDirectoryHandle) {
   if (!contents.hasSymbols && !contents.hasFootprints) {
     setStatus(
       searchStatus,
-      `“${handle.name}” has no symbols or footprints folder yet. Part Finder creates them on the first install. If this is the wrong folder, choose again.`,
+      `“${handle.name}” has no libraries yet. They are created on first install.`,
       'info',
       '',
       { label: 'Choose again', run: () => void onLibraryAction('pick') },
@@ -1597,7 +1597,7 @@ function normalizeRelayInput(input: HTMLInputElement) {
 async function testRelay(note: HTMLElement, input: HTMLInputElement) {
   const { url, error } = normalizeRelayUrl(input.value);
   if (error || !url) {
-    setNote(note, error ?? 'Paste your relay URL first.', 'error');
+    setNote(note, error ?? 'Paste the relay URL first.', 'error');
     return;
   }
   if (url !== relayUrl) await onRelayUrlChange(input);
@@ -1607,12 +1607,12 @@ async function testRelay(note: HTMLElement, input: HTMLInputElement) {
     const body = await resp.text();
     const health = interpretRelayHealth(resp.status, body);
     if (health.ok && health.outdated) {
-      setNote(note, 'Relay works, but it is an older version. Redeploy it from packages/relay to get every feature.', 'warn');
-    } else if (health.ok) setNote(note, 'Relay reachable. You can search now.', 'ok');
+      setNote(note, 'Works, but outdated. Redeploy packages/relay for every feature.', 'warn');
+    } else if (health.ok) setNote(note, 'Relay works. Ready to search.', 'ok');
     else setNote(note, health.detail, 'error');
   } catch (err) {
     const timedOut = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
-    setNote(note, timedOut ? 'No answer in 8 seconds. Check the address and your connection.' : 'Could not reach that address. Check it and your connection.', 'error');
+    setNote(note, timedOut ? 'No answer in 8 s. Check the URL and your connection.' : 'Cannot reach it. Check the URL and your connection.', 'error');
   }
 }
 
@@ -1647,15 +1647,15 @@ function refreshReadiness() {
   if (hasFolder()) {
     libPill.classList.add('is-ready');
     setText(libPillValue, folderName());
-    libPill.title = `Library folder: ${folderName()}. Click to change.`;
+    libPill.title = `${folderName()}. Click to change.`;
   } else if (!runningInOverlay && folderPermission === 'prompt') {
     libPill.classList.add('is-missing');
     setText(libPillValue, 'Reconnect folder');
-    libPill.title = `Chrome needs one click to re-allow “${savedFolderName}”.`;
+    libPill.title = `Click to re-allow “${savedFolderName}”.`;
   } else {
     libPill.classList.add('is-missing');
     setText(libPillValue, 'Choose folder');
-    libPill.title = 'Choose your KiCad library folder';
+    libPill.title = 'Choose your library folder';
   }
 
   // Relay pill.
@@ -1663,7 +1663,7 @@ function refreshReadiness() {
   if (hasRelay()) {
     relayPill.classList.add('is-ready');
     setText(relayPillValue, prettyRelay(relayUrl));
-    relayPill.title = `Relay: ${relayUrl}. Click to edit.`;
+    relayPill.title = `${relayUrl}. Click to edit.`;
   } else {
     relayPill.classList.add('is-missing');
     setText(relayPillValue, 'Add relay URL');
@@ -1685,12 +1685,12 @@ function refreshReadiness() {
   searchBtn.disabled = blocked || searchInFlight;
   searchField.classList.toggle('is-disabled', blocked);
   if (blocked) {
-    setText(searchHint, 'Add your relay URL to start searching.');
+    setText(searchHint, 'Add your relay URL to search.');
     show(searchHint);
   } else if (!hasFolder()) {
     setText(searchHint, folderPermission === 'prompt' && !runningInOverlay
-      ? 'Search and preview work now. Click “Reconnect folder” before installing.'
-      : 'Search and preview work now. Choose a library folder to install.');
+      ? 'Search works. Reconnect the folder to install.'
+      : 'Search works. Choose a folder to install.');
     show(searchHint);
   } else {
     hide(searchHint);
@@ -1739,7 +1739,7 @@ async function runSearch(rawQuery: string) {
     return;
   }
   if (!query) {
-    setStatus(searchStatus, 'Enter an LCSC number (like C3235557) or a part number.', 'error');
+    setStatus(searchStatus, 'Enter an LCSC number (C3235557) or part number.', 'error');
     return;
   }
 
@@ -1750,7 +1750,7 @@ async function runSearch(rawQuery: string) {
       return;
     }
 
-    setStatus(searchStatus, `Looking up ${query} on JLCPCB…`, 'loading');
+    setStatus(searchStatus, `Searching ${query}…`, 'loading');
     let matches: JlcMatch[] = [];
     let relaxed = false;
     let matchedQuery = '';
@@ -1777,7 +1777,7 @@ async function runSearch(rawQuery: string) {
       return;
     }
 
-    const note = relaxed ? `No exact match for ${query}. Showing the closest results for ${matchedQuery}.` : undefined;
+    const note = relaxed ? `No exact match. Showing ${matchedQuery}.` : undefined;
     candidates = matches;
     if (matches.length > 1) renderCandidates(matches, matches[0].lcscId);
     await convertAndShow(matches[0].lcscId, matches[0], note, seq);
@@ -1793,20 +1793,20 @@ function explainSearchFailure(diagnostic: string, query: string): { text: string
     return { text: 'Add your relay URL first.', detail: '' };
   }
   if (/fetch threw|message failed|timed out/.test(diagnostic)) {
-    return { text: 'Could not reach your relay. Check the Relay URL in Settings.', detail: diagnostic, action: testAction };
+    return { text: 'Cannot reach your relay. Check its URL.', detail: diagnostic, action: testAction };
   }
   if (/non-JSON/.test(diagnostic)) {
-    return { text: 'Your relay answered with a web page instead of data. The URL is probably missing /api.', detail: diagnostic, action: testAction };
+    return { text: 'The relay sent a web page, not data. Add /api to a Vercel URL.', detail: diagnostic, action: testAction };
   }
   const m = diagnostic.match(/^http (\d+)(?:, (\d+) results)?/);
   if (m && m[2] === undefined) {
     const status = Number(m[1]);
     if (status === 403 || status === 429) {
-      return { text: 'JLCPCB refused the request for now. Wait a minute, or paste the exact LCSC number (C…).', detail: diagnostic };
+      return { text: 'JLCPCB is busy. Wait a minute or paste the LCSC number (C…).', detail: diagnostic };
     }
-    return { text: `Your relay returned HTTP ${status}. Check its logs or redeploy it.`, detail: diagnostic, action: testAction };
+    return { text: `Relay error ${status}. Redeploy it or check its logs.`, detail: diagnostic, action: testAction };
   }
-  return { text: `No JLCPCB part matches “${query}”. Try the exact LCSC number (C…) or one of the sources below.`, detail: '' };
+  return { text: `No match for “${query}”. Try the LCSC number (C…) or a source below.`, detail: '' };
 }
 
 function renderCandidates(matches: JlcMatch[], selectedId: string) {
@@ -1851,7 +1851,7 @@ function renderCandidates(matches: JlcMatch[], selectedId: string) {
 }
 
 async function convertAndShow(lcscId: string, match: JlcMatch | null, note: string | undefined, seq: number) {
-  setStatus(searchStatus, `Fetching and converting ${lcscId}…`, 'loading');
+  setStatus(searchStatus, `Loading ${lcscId}…`, 'loading');
   hide(partCard);
   preview?.reset();
 
@@ -1948,8 +1948,8 @@ function renderSourceBadge(result: ConvertResult) {
   sourceBadge.className = `source-badge ${verified ? 'is-verified' : 'is-community'}`;
   sourceBadge.textContent = verified ? (official ? 'LCSC verified' : 'Verified') : 'Community part';
   sourceBadge.title = verified
-    ? `Checked by LCSC. Made by ${author}.`
-    : `Uploaded by ${author}. LCSC has not checked it.`;
+    ? `Checked by LCSC. Author: ${author}.`
+    : `Uploaded by ${author}. Not checked by LCSC.`;
   show(sourceBadge);
 }
 
@@ -1960,10 +1960,10 @@ function renderChecks(report: PartReport) {
   setText(
     checksTitle,
     report.blocking
-      ? 'These files cannot be installed'
+      ? 'Files damaged. Cannot install.'
       : problems.length
         ? `${problems.length} thing${problems.length === 1 ? '' : 's'} to check`
-        : `All ${report.checks.length} checks passed`,
+        : `All checks passed`,
   );
   checksList.textContent = '';
   for (const check of report.checks) {
@@ -2083,18 +2083,18 @@ async function onInstall() {
   if (runningInOverlay) {
     const lcscId = current.meta.lcsc;
     if (!lcscId) {
-      failInstall('Missing LCSC id. Run the search again.');
+      failInstall('Missing LCSC number. Search again.');
       return;
     }
-    setInstallButton('busy', 'Installing in a separate window…');
+    setInstallButton('busy', 'Installing in a window…');
     hide(successPanel);
-    setStatus(installStatus, 'A small window is writing the files. It closes by itself.', 'loading');
+    setStatus(installStatus, 'A small window writes the files, then closes.', 'loading');
     installInFlight = true;
     clearOverlayWatchdog();
     overlayInstallWatchdog = setTimeout(() => {
       if (!installInFlight) return;
       installInFlight = false;
-      markOverlayInstallFailed(false, 'No answer from the install window. Try again.');
+      markOverlayInstallFailed(false, 'The install window did not answer. Try again.');
     }, OVERLAY_INSTALL_WATCHDOG_MS);
     try {
       const resp = await chrome.runtime.sendMessage({ type: 'OVERLAY_INSTALL', lcscId, bucket });
@@ -2154,15 +2154,15 @@ async function onInstall() {
     setInstallButton('done', `Installed ${truncate(partName, 22)} → ${lib}`);
     const files = res.written.filter((w) => !w.includes('(deduped)')).length;
     const summary = res.symbolAdded
-      ? `Installed into ${lib}. ${files} file${files === 1 ? '' : 's'} written.`
-      : `${partName} was already in ${lib}. Footprint refreshed.`;
+      ? `Installed into ${lib}. ${files} file${files === 1 ? '' : 's'}.`
+      : `Already in ${lib}. Footprint updated.`;
     const model = res.modelStatus && res.modelStatus !== 'ok' ? ` 3D model ${res.modelStatus}.` : '';
     setStatus(installStatus, summary + model, 'success');
     show(successPanel);
     installAnotherBtn.focus();
   } else {
     setInstallButton(res.written.length ? 'partial' : 'error', res.written.length ? 'Partly installed. Retry' : 'Install failed. Retry');
-    setStatus(installStatus, res.written.length ? `Some files were not written: ${res.errors.join('; ')}` : res.errors.join('; ') || 'Install failed.', 'error');
+    setStatus(installStatus, res.written.length ? `Some files failed: ${res.errors.join('; ')}` : res.errors.join('; ') || 'Install failed.', 'error');
     if (res.written.length) show(successPanel);
   }
 }
@@ -2244,14 +2244,14 @@ function refreshInstallEnabled() {
   const blocked = currentReport?.blocking === true;
   installBtn.disabled = !(hasFolder() && current && hasRelay()) || blocked;
   installBtn.title = blocked
-    ? 'The converted files are damaged. Search again or use another source.'
+    ? 'Files damaged. Search again or try another source.'
     : !hasRelay()
     ? 'Add your relay URL first.'
     : hasFolder()
       ? ''
       : folderPermission === 'prompt' && !runningInOverlay
-        ? 'Click “Reconnect folder” first.'
-        : 'Choose a library folder first.';
+        ? 'Reconnect the folder first.'
+        : 'Choose a folder first.';
 }
 
 function toggleFlag(flag: HTMLElement, input: HTMLInputElement, missing: boolean) {

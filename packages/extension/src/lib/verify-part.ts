@@ -94,15 +94,15 @@ export function verifyPart(part: VerifiableResult): PartReport {
   // Who made it.
   const { verified, official, author } = part.source;
   if (official && verified) {
-    checks.push({ id: 'source', level: 'ok', message: 'Published and verified by LCSC' });
+    checks.push({ id: 'source', level: 'ok', message: 'Made and verified by LCSC' });
   } else if (verified) {
     checks.push({ id: 'source', level: 'ok', message: `Verified by LCSC, made by ${author}` });
   } else {
     checks.push({
       id: 'source',
       level: 'warn',
-      message: official ? 'Published by LCSC but not marked verified' : `Made by ${author}, not verified by LCSC`,
-      detail: 'Compare the pinout and land pattern with the datasheet before ordering boards.',
+      message: official ? 'Made by LCSC, not verified' : `Made by ${author}, not verified`,
+      detail: 'Check pinout and pads against the datasheet before ordering.',
     });
   }
 
@@ -114,16 +114,16 @@ export function verifyPart(part: VerifiableResult): PartReport {
 
   checks.push(
     !symbolOk
-      ? { id: 'symbol', level: 'error', message: 'Symbol data is damaged', detail: 'Search again. If it repeats, use another source below.' }
+      ? { id: 'symbol', level: 'error', message: 'Symbol data is damaged', detail: 'Search again, or try a source below.' }
       : pins.length === 0
         ? { id: 'symbol', level: 'warn', message: 'Symbol has no pins' }
         : { id: 'symbol', level: 'ok', message: `Symbol: ${plural(pins.length, 'pin')}` },
   );
   checks.push(
     !footprintOk
-      ? { id: 'footprint', level: 'error', message: 'Footprint data is damaged', detail: 'Search again. If it repeats, use another source below.' }
+      ? { id: 'footprint', level: 'error', message: 'Footprint data is damaged', detail: 'Search again, or try a source below.' }
       : pads.length === 0
-        ? { id: 'footprint', level: 'warn', message: 'Footprint has no electrical pads' }
+        ? { id: 'footprint', level: 'warn', message: 'Footprint has no pads' }
         : { id: 'footprint', level: 'ok', message: `Footprint: ${plural(new Set(pads).size, 'pad')}${part.source.footprintTitle ? ` (${part.source.footprintTitle})` : ''}` },
   );
 
@@ -135,8 +135,8 @@ export function verifyPart(part: VerifiableResult): PartReport {
     const extra = [...padSet].filter((n) => !pinSet.has(n));
     const dupes = [...new Set(pins.filter((n, i) => pins.indexOf(n) !== i))];
     const notes = [
-      extra.length ? `Pads with no pin (often a thermal or mounting pad): ${list(extra)}.` : '',
-      dupes.length ? `Pin numbers used more than once: ${list(dupes)}.` : '',
+      extra.length ? `Pads without a pin (often thermal or mounting): ${list(extra)}.` : '',
+      dupes.length ? `Repeated pin numbers: ${list(dupes)}.` : '',
     ].filter(Boolean);
     checks.push(
       missing.length
@@ -144,16 +144,16 @@ export function verifyPart(part: VerifiableResult): PartReport {
             id: 'pin-pad',
             level: 'warn',
             message: `Pin${missing.length === 1 ? '' : 's'} ${list(missing)} ${missing.length === 1 ? 'has' : 'have'} no pad`,
-            detail: ['KiCad will report these when you update the PCB.', ...notes].join(' '),
+            detail: ['KiCad flags these on PCB update.', ...notes].join(' '),
           }
-        : { id: 'pin-pad', level: 'ok', message: 'Every pin has a matching pad', detail: notes.join(' ') || undefined },
+        : { id: 'pin-pad', level: 'ok', message: 'Every pin has a pad', detail: notes.join(' ') || undefined },
     );
   }
 
   checks.push(
     part.model3dUrl
-      ? { id: 'model', level: 'ok', message: '3D model available (STEP)' }
-      : { id: 'model', level: 'info', message: 'No 3D model. Symbol and footprint still install.' },
+      ? { id: 'model', level: 'ok', message: '3D model (STEP)' }
+      : { id: 'model', level: 'info', message: 'No 3D model. The rest still installs.' },
   );
 
   const worst = Math.max(...checks.map((c) => RANK[c.level]));

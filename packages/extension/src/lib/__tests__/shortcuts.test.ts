@@ -113,7 +113,7 @@ describe('validateCombo', () => {
   it('requires a modifier for install', () => {
     const res = validateCombo('i', 'install', DEFAULT_PANEL_SHORTCUTS);
     expect(res.ok).toBe(false);
-    expect(res.reason).toMatch(/modifier/);
+    expect(res.reason).toMatch(/Ctrl or Alt/);
     expect(validateCombo('Alt+i', 'install', DEFAULT_PANEL_SHORTCUTS).ok).toBe(true);
   });
   it('flags duplicates with the other action name', () => {
@@ -181,7 +181,7 @@ describe('page shortcuts', () => {
   it('requires a modifier for every page action', () => {
     const res = validatePageCombo('k', 'open-finder', DEFAULT_PAGE_SHORTCUTS);
     expect(res.ok).toBe(false);
-    expect(res.reason).toMatch(/modifier/);
+    expect(res.reason).toMatch(/Ctrl or Alt/);
     expect(validatePageCombo('Shift+k', 'open-finder', DEFAULT_PAGE_SHORTCUTS).ok).toBe(false);
     expect(validatePageCombo('Alt+k', 'open-finder', DEFAULT_PAGE_SHORTCUTS).ok).toBe(true);
   });

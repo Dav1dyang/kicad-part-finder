@@ -82,7 +82,7 @@ describe('verifyPart', () => {
 
   it('notes duplicate pin numbers', () => {
     const report = verifyPart({ symbol: sym(pin('1') + pin('1')), footprint: fp(pad('1')), model3dUrl: null, source: OFFICIAL });
-    expect(byId(report.checks, 'pin-pad')?.detail).toMatch(/twice|more than once/);
+    expect(byId(report.checks, 'pin-pad')?.detail).toMatch(/Repeated pin numbers: 1/);
   });
 
   it('reports the 3D model as optional', () => {
