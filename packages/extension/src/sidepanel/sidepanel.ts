@@ -53,6 +53,7 @@ import {
 } from '../lib/library-writer.js';
 import { getSecondarySourceLinks } from '../lib/mpn-sources.js';
 import { verifyPart, type PartReport } from '../lib/verify-part.js';
+import { DEFAULT_PALETTE_ID, PALETTES, findPalette, paletteVars, type Scheme } from '../lib/palettes.js';
 import { normalizeRelayUrl, prettyRelay, interpretRelayHealth } from '../lib/relay-url.js';
 import {
   PANEL_ACTIONS,
@@ -97,6 +98,7 @@ const windowNote = $('windowNote');
 const openModeSelector = $('openModeSelector');
 const windowModeNote = $('windowModeNote');
 const themeSelector = $('themeSelector');
+const paletteSelector = $('paletteSelector');
 const selectionSearchToggle = $<HTMLInputElement>('selectionSearchToggle');
 const allSitesRow = $('allSitesRow');
 const allSitesBtn = $<HTMLButtonElement>('allSitesBtn');
@@ -192,6 +194,7 @@ let currentMatch: JlcMatch | null = null;
 let candidates: JlcMatch[] = [];
 let relayUrl = '';
 let libraryConfig: LibraryConfig = { ...DEFAULT_LIBRARY_CONFIG };
+let paletteId = DEFAULT_PALETTE_ID;
 /** Generation counter: any await in a search/convert checks it's still current. */
 let searchSeq = 0;
 let searchInFlight = false;
@@ -321,6 +324,12 @@ async function init() {
     const target = e.target as HTMLInputElement;
     if (target?.name === 'openMode') void onOpenModeChange(target.value);
   });
+  renderPaletteChoices();
+  paletteSelector.addEventListener('change', (e) => {
+    const target = e.target as HTMLInputElement;
+    if (target?.name === 'palette') void onPaletteChange(target.value);
+  });
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyPalette);
   themeSelector.addEventListener('change', (e) => {
     const target = e.target as HTMLInputElement;
     if (target?.name === 'theme') void onThemeChange(target.value);
@@ -366,10 +375,11 @@ async function init() {
 
   // Stored settings.
   try {
-    const stored = await chrome.storage.local.get(['relayUrl', 'openMode', 'theme', 'selectionSearch', 'libraryConfig']);
+    const stored = await chrome.storage.local.get(['relayUrl', 'openMode', 'theme', 'selectionSearch', 'libraryConfig', 'palette']);
     relayUrl = normalizeRelayUrl(typeof stored.relayUrl === 'string' ? stored.relayUrl : '').url;
     libraryConfig = normalizeLibraryConfig(stored.libraryConfig);
     selectOpenMode(normalizeOpenMode(stored.openMode));
+    paletteId = findPalette(stored.palette).id;
     applyTheme(normalizeTheme(stored.theme));
     selectionSearch = stored.selectionSearch !== false;
   } catch {
@@ -385,6 +395,10 @@ async function init() {
     if (area === 'local' && changes.libraryConfig) {
       libraryConfig = normalizeLibraryConfig(changes.libraryConfig.newValue);
       applyLibraryConfig();
+    }
+    if (area === 'local' && changes.palette) {
+      paletteId = findPalette(changes.palette.newValue).id;
+      applyPalette();
     }
   });
   void refreshAllSitesRow();
@@ -883,6 +897,62 @@ function applyTheme(theme: Theme) {
   }
   const input = themeSelector.querySelector<HTMLInputElement>(`input[name="theme"][value="${theme}"]`);
   if (input) input.checked = true;
+  applyPalette();
+}
+
+/** Light or dark, as the user sees it right now. */
+function currentScheme(): Scheme {
+  const pinned = document.documentElement.getAttribute('data-theme');
+  if (pinned === 'light' || pinned === 'dark') return pinned;
+  return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+/** One swatch per colour combination: main and accent side by side. */
+function renderPaletteChoices() {
+  paletteSelector.textContent = '';
+  for (const palette of PALETTES) {
+    const label = document.createElement('label');
+    label.className = 'palette-choice';
+    label.title = palette.name;
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = 'palette';
+    input.value = palette.id;
+    const swatch = document.createElement('span');
+    swatch.className = 'palette-swatch';
+    swatch.dataset.palette = palette.id;
+    swatch.setAttribute('aria-hidden', 'true');
+    const name = document.createElement('span');
+    name.className = 'palette-name';
+    name.textContent = palette.name;
+    label.append(input, swatch, name);
+    paletteSelector.appendChild(label);
+  }
+}
+
+/** Set the chosen combination's colours for the current scheme (and the floating window). */
+function applyPalette() {
+  const scheme = currentScheme();
+  const vars = paletteVars(findPalette(paletteId), scheme);
+  for (const doc of [document, floatHandle?.pipWindow.document].filter(Boolean) as Document[]) {
+    for (const [name, value] of Object.entries(vars)) doc.documentElement.style.setProperty(name, value);
+  }
+  for (const swatch of paletteSelector.querySelectorAll<HTMLElement>('.palette-swatch')) {
+    const c = findPalette(swatch.dataset.palette)[scheme];
+    swatch.style.background = `linear-gradient(90deg, ${c.main} 0 50%, ${c.accent} 50% 100%)`;
+  }
+  const input = paletteSelector.querySelector<HTMLInputElement>(`input[value="${paletteId}"]`);
+  if (input) input.checked = true;
+}
+
+async function onPaletteChange(value: string) {
+  paletteId = findPalette(value).id;
+  applyPalette();
+  try {
+    await chrome.storage.local.set({ palette: paletteId });
+  } catch {
+    /* keep for this session */
+  }
 }
 async function onThemeChange(value: string) {
   const theme = normalizeTheme(value);
@@ -1109,6 +1179,13 @@ function renderKeyHints() {
     const action = el.dataset.shortcut as PanelAction;
     const combo = parseCombo(panelShortcuts[action]);
     el.textContent = combo ? comboToKeyCaps(combo, platform).join(platform === 'mac' ? '' : '+') : '';
+  }
+  // Preview tabs show their key in the tooltip only; a badge on every tab is noise.
+  for (const el of app.querySelectorAll<HTMLElement>('[data-shortcut-title]')) {
+    const action = el.dataset.shortcutTitle as PanelAction;
+    const combo = parseCombo(panelShortcuts[action]);
+    const name = el.textContent?.trim() ?? '';
+    el.title = combo ? `${name} (${comboToKeyCaps(combo, platform).join(platform === 'mac' ? '' : '+')})` : name;
   }
 }
 
@@ -1830,7 +1907,7 @@ function renderCandidates(matches: JlcMatch[], selectedId: string) {
     }
     const meta = document.createElement('span');
     meta.className = 'candidate-meta';
-    meta.textContent = [m.package || '—', m.lcscId].join(' · ');
+    meta.textContent = [m.package, m.lcscId].filter(Boolean).join(' · ');
     const stock = document.createElement('span');
     stock.className = `candidate-stock${m.stock <= 0 ? ' is-none' : m.stock < 100 ? ' is-low' : ''}`;
     stock.textContent = m.stock > 0 ? `${m.stock.toLocaleString()} in stock${m.price !== null ? ` · ${formatPrice(m.price)}` : ''}` : 'No stock';
@@ -1988,16 +2065,12 @@ function renderCardSub(manufacturer: string, pkg: string) {
     hide(cardSub);
     return;
   }
-  parts.forEach((text, i) => {
-    if (i > 0) {
-      const sep = document.createElement('span');
-      sep.className = 'sep';
-      sep.textContent = '·';
-      cardSub.appendChild(sep);
-    }
+  // No separator glyph: when the package wraps it would dangle at a line end.
+  parts.forEach((text) => {
     const span = document.createElement('span');
+    span.className = 'card-sub-item';
     span.textContent = text;
-    if (text === pkg && pkg) span.className = 'mono';
+    span.title = text; // long package names are shortened with an ellipsis
     cardSub.appendChild(span);
   });
   show(cardSub);
