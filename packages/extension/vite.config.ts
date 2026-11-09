@@ -32,11 +32,6 @@ export default defineConfig(({ mode }) => ({
     // keep them for `pnpm dev:extension` only.
     sourcemap: mode === 'development',
   },
-  resolve: {
-    alias: {
-      '@shared': resolve(__dirname, '../shared/src'),
-    },
-  },
   plugins: [
     {
       name: 'iife-wrap-content-scripts',

@@ -10,7 +10,7 @@
  * Companion to jlcpcb-query.test.ts (which covers the pure query relaxation).
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { resolveMpnDetailed, resolveMpnToLcsc } from '../jlcpcb';
+import { resolveMpnDetailed } from '../jlcpcb';
 
 /** Stand-in deployed Worker relay origin (no trailing slash). */
 const RELAY = 'https://kicad-part-relay.example.workers.dev';
@@ -148,16 +148,5 @@ describe('resolveMpnDetailed diagnostic', () => {
     expect(res.matches).toHaveLength(0);
     expect(res.diagnostic).toBe('');
     expect(fetchSpy).not.toHaveBeenCalled();
-  });
-
-  it('resolveMpnToLcsc still returns just the matches array', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => fakeResponse({ ok: true, status: 200, json: () => jlcEnvelope(2) })),
-    );
-
-    const matches = await resolveMpnToLcsc('TPS2116DRLR', RELAY);
-    expect(Array.isArray(matches)).toBe(true);
-    expect(matches).toHaveLength(2);
   });
 });

@@ -100,11 +100,31 @@
       </div>
 
       <div class="setting-block">
+        <span class="micro-label">KiCad libraries</span>
+        <div class="field-row">
+          <div class="field">
+            <label class="micro-label micro-label--sub" for="libPrefixInput">Name prefix</label>
+            <input id="libPrefixInput" class="text-input mono" type="text" autocomplete="off" spellcheck="false" aria-describedby="libConfigNote" />
+          </div>
+          <div class="field">
+            <label class="micro-label micro-label--sub" for="libPathVarInput">Path variable</label>
+            <input id="libPathVarInput" class="text-input mono" type="text" autocomplete="off" spellcheck="false" aria-describedby="libConfigNote" />
+          </div>
+        </div>
+        <div id="libConfigNote" class="field-note" aria-live="polite"></div>
+        <p class="hint">To register the libraries in KiCad once: add the path variable under Preferences › Configure Paths, pointing at your library folder. Then, with KiCad closed, paste these rows into <code>sym-lib-table</code> and <code>fp-lib-table</code> in KiCad's settings folder.</p>
+        <div class="btn-row">
+          <button id="copySymRowsBtn" class="btn btn-ghost btn-sm" type="button">Copy symbol rows</button>
+          <button id="copyFpRowsBtn" class="btn btn-ghost btn-sm" type="button">Copy footprint rows</button>
+        </div>
+      </div>
+
+      <div class="setting-block">
         <span class="micro-label" id="openModeLabel">Open the finder as</span>
         <div id="openModeSelector" class="segmented" role="radiogroup" aria-labelledby="openModeLabel">
           <label class="segment">
             <input class="segment-input" type="radio" name="openMode" value="auto" />
-            <span class="segment-face"><span class="segment-title">Side panel</span><span class="segment-hint">Default. Opens a tab on browsers without a side panel.</span></span>
+            <span class="segment-face"><span class="segment-title">Side panel</span><span class="segment-hint">Default. Chrome, Edge, Brave, Dia. Opens a tab where there is no side panel.</span></span>
           </label>
           <label class="segment">
             <input class="segment-input" type="radio" name="openMode" value="window" />
@@ -142,18 +162,21 @@
         </div>
       </div>
 
-      <div class="setting-block">
-        <div class="section-title">
+      <details class="setting-block shortcuts-disclosure">
+        <summary class="section-title">
           <span>Keyboard shortcuts</span>
-          <button id="resetShortcutsBtn" class="link-btn" type="button">Reset all</button>
-        </div>
+          <span class="disclosure-hint" aria-hidden="true"></span>
+        </summary>
+        <div class="shortcuts-body">
         <p class="hint">Browser shortcuts work on any page and even when the finder is closed. Chrome manages them, so changing one opens Chrome's shortcut page. Arc and Dia ignore them.</p>
         <div id="browserShortcuts" class="shortcut-list" role="list"></div>
         <p class="hint">Page shortcuts do the same jobs, but Part Finder listens for them itself. They work on DigiKey, LCSC, the page where you opened the finder, and everywhere once you allow all sites above. Click a key to change it. Press Escape to cancel or Backspace to remove it.</p>
         <div id="pageShortcuts" class="shortcut-list" role="list"></div>
         <p class="hint">Panel shortcuts work while the finder is focused.</p>
         <div id="panelShortcuts" class="shortcut-list" role="list"></div>
-      </div>
+        <button id="resetShortcutsBtn" class="link-btn" type="button">Reset all shortcuts</button>
+        </div>
+      </details>
     </section>
 
     <!-- Search -->
@@ -191,6 +214,7 @@
       <header class="card-head">
         <div class="card-head-top">
           <a id="cardLcsc" class="lcsc-chip mono" target="_blank" rel="noopener" title="Open on LCSC">C—</a>
+          <span id="sourceBadge" class="source-badge hidden"></span>
           <span id="stockBadge" class="stock-badge hidden"></span>
         </div>
         <h2 id="cardMpn" class="card-mpn mono"></h2>
@@ -210,6 +234,16 @@
             <div id="previewPane3d" class="preview-pane preview-pane--3d" role="tabpanel" aria-labelledby="previewTab3d" tabindex="0" hidden></div>
           </div>
         </section>
+
+        <!-- Checks run on the converted files before anything is written. -->
+        <details id="checks" class="checks">
+          <summary class="checks-summary">
+            <span class="checks-dot" aria-hidden="true"></span>
+            <span id="checksTitle" class="checks-title">Checks</span>
+            <span class="checks-toggle" aria-hidden="true"></span>
+          </summary>
+          <ul id="checksList" class="checks-list"></ul>
+        </details>
 
         <div class="field">
           <label class="micro-label" for="fieldMpn">MPN <span class="flag hidden" id="flagMpn">confirm</span></label>
@@ -244,11 +278,6 @@
           <div id="destPath" class="field-note mono"></div>
         </div>
 
-        <div class="assets">
-          <div class="asset" id="symbolAvail"><span class="asset-name">Symbol</span><span class="asset-state">—</span></div>
-          <div class="asset" id="footprintAvail"><span class="asset-name">Footprint</span><span class="asset-state">—</span></div>
-          <div class="asset" id="model3dAvail"><span class="asset-name">3D model</span><span class="asset-state">—</span></div>
-        </div>
       </div>
 
       <footer class="card-foot">

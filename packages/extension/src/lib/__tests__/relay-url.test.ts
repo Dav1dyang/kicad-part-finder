@@ -31,8 +31,12 @@ describe('prettyRelay', () => {
 });
 
 describe('interpretRelayHealth', () => {
-  it('accepts the health text', () => {
-    expect(interpretRelayHealth(200, 'kicad-part-relay ok')).toEqual({ ok: true });
+  it('accepts the health text and reads the version', () => {
+    expect(interpretRelayHealth(200, 'kicad-part-relay ok v2')).toEqual({ ok: true, version: 2, outdated: false });
+    expect(interpretRelayHealth(200, 'kicad-part-relay ok v3')).toEqual({ ok: true, version: 3, outdated: false });
+  });
+  it('treats a relay without a version as v1 and outdated', () => {
+    expect(interpretRelayHealth(200, 'kicad-part-relay ok')).toEqual({ ok: true, version: 1, outdated: true });
   });
   it('flags a 200 that is not the relay', () => {
     const r = interpretRelayHealth(200, '<!doctype html>');

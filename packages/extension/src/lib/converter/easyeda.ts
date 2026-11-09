@@ -52,6 +52,26 @@ export interface ConvertResult {
   model3dUrl: string | null;
   /** Deterministic metadata extracted from the EasyEDA JSON. */
   meta: ConvertMeta;
+  /** Who made the symbol and footprint, and whether LCSC checked them. */
+  source: PartSource;
+}
+
+/**
+ * Where the EasyEDA data came from. LCSC publishes most library parts from its
+ * own account and marks them verified; anyone can also upload a part, and
+ * those are the ones most likely to need checking against the datasheet.
+ */
+export interface PartSource {
+  /** EasyEDA's `verify` flag on the component. */
+  verified: boolean;
+  /** Symbol and footprint were both published by LCSC's own account. */
+  official: boolean;
+  /** Display name of the symbol's author ("LCSC" or a community user). */
+  author: string;
+  /** EasyEDA's name for the footprint, e.g. `SOT-583-8_L2.1-W1.6-P0.50-LS1.6-BL`. */
+  footprintTitle: string;
+  /** Last update of the component, as YYYY-MM-DD, or '' when unknown. */
+  updated: string;
 }
 
 /**
@@ -63,10 +83,36 @@ export interface EasyedaResult {
   description?: string;
   lcsc?: { number?: string };
   szlcsc?: { number?: string };
+  verify?: boolean;
+  owner?: EasyedaOwner;
+  /** Unix seconds. */
+  updateTime?: number;
   /** Schematic-symbol document (object or JSON string). */
   dataStr?: any;
   /** Footprint document lives under packageDetail.dataStr (object or JSON string). */
-  packageDetail?: { dataStr?: any };
+  packageDetail?: { title?: string; owner?: EasyedaOwner; dataStr?: any };
+}
+
+interface EasyedaOwner {
+  username?: string;
+  nickname?: string;
+}
+
+const isLcscAccount = (owner: EasyedaOwner | undefined) => (owner?.username ?? '').toLowerCase() === 'lcsc';
+
+/** Read provenance from an EasyEDA `result`. Pure. */
+export function extractSource(result: EasyedaResult): PartSource {
+  const updated =
+    typeof result.updateTime === 'number' && Number.isFinite(result.updateTime) && result.updateTime > 0
+      ? new Date(result.updateTime * 1000).toISOString().slice(0, 10)
+      : '';
+  return {
+    verified: result.verify === true,
+    official: isLcscAccount(result.owner) && isLcscAccount(result.packageDetail?.owner),
+    author: firstNonEmpty(result.owner?.nickname, result.owner?.username, 'unknown'),
+    footprintTitle: firstNonEmpty(result.packageDetail?.title),
+    updated,
+  };
 }
 
 /** First defined, non-empty string among the candidates (else ''). */
@@ -246,6 +292,7 @@ export function convertFromResult(result: EasyedaResult, lcscId: string): Conver
     footprint,
     model3dUrl,
     meta,
+    source: extractSource(result),
   };
 }
 
