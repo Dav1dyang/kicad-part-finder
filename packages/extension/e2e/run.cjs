@@ -71,6 +71,14 @@ const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'}  ${msg}`); if
   await page.click('#relayTestBtn');
   await page.waitForSelector('#relayNote.is-ok', { timeout: 5000 });
   ok(true, `relay test: "${(await page.textContent('#relayNote')).trim()}"`);
+  // An older relay still works but is flagged for a redeploy.
+  await page.fill('#relayUrlInput', `${RELAY}/old`);
+  await page.click('#relayTestBtn');
+  await page.waitForSelector('#relayNote.is-warn', { timeout: 5000 });
+  ok((await page.textContent('#relayNote')).includes('outdated'), `old relay flagged: "${(await page.textContent('#relayNote')).trim()}"`);
+  await page.fill('#relayUrlInput', RELAY);
+  await page.click('#relayTestBtn');
+  await page.waitForSelector('#relayNote.is-ok', { timeout: 5000 });
   await page.click('#settingsBtn');
 
   await page.fill('#searchInput', 'TPS2116DRLR');
@@ -156,12 +164,120 @@ const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'}  ${msg}`); if
   await page.fill('#libPrefixInput', 'DavidLib');
   await page.screenshot({ path: p.join(OUT, 'settings.png'), fullPage: true });
 
+  // Colour combinations: picking one recolours the panel and is remembered.
+  // (Settings is still open from the prefix checks above.)
+  const before = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--btn-primary').trim());
+  await page.click('.palette-choice:has(input[value="lake"])');
+  await page.waitForTimeout(150);
+  const after = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--btn-primary').trim());
+  const savedPalette = await sw.evaluate(() => chrome.storage.local.get('palette'));
+  ok(before !== after && savedPalette.palette === 'lake', `colour combination applies and is saved (${before} -> ${after})`);
+  await page.screenshot({ path: p.join(OUT, 'settings-lake.png'), fullPage: true });
+  await page.click('.palette-choice:has(input[value="apple"])');
+
   await page.click('#settingsBtn');
   await page.fill('#searchInput', 'NOPE123XYZ');
   await page.press('#searchInput', 'Enter');
   await page.waitForSelector('#searchStatus.error', { timeout: 15000 });
   const noMatch = (await page.textContent('#searchStatus')).trim();
   ok(await page.isVisible('#secondarySources'), `no match: "${noMatch}", other sources shown`);
+
+  // Layout under stress: extreme parts at side-panel widths, both themes.
+  // Fails on sideways scrolling or text spilling out of its box.
+  const layoutProblems = () =>
+    page.evaluate(() => {
+      const w = document.documentElement.clientWidth;
+      const bad = [];
+      if (document.documentElement.scrollWidth > w + 1) bad.push(`page scrolls sideways (${document.documentElement.scrollWidth} > ${w})`);
+      for (const el of document.querySelectorAll('#app *')) {
+        if (el.closest('.hidden, [hidden]') || el.closest('svg') || el.tagName === 'CANVAS') continue;
+        const r = el.getBoundingClientRect();
+        if (!r.width || !r.height) continue;
+        const name = `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}.${String(el.className).split(' ')[0]}`;
+        if (r.right > w + 0.5 || r.left < -0.5) bad.push(`${name} leaves the panel`);
+        const cs = getComputedStyle(el);
+        const textBox = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+        if (textBox && cs.overflowX === 'visible' && !/INPUT|SELECT|TEXTAREA/.test(el.tagName) && el.scrollWidth > el.clientWidth + 1) {
+          bad.push(`${name} text overflows (${el.scrollWidth} > ${el.clientWidth})`);
+        }
+      }
+      return [...new Set(bad)].slice(0, 6);
+    });
+  const cases = [
+    ['C3235557', 'normal part'],
+    ['C9999991', 'very long names'],
+    ['C9999992', 'no maker, package, or 3D model'],
+    ['MANY', '15 matches'],
+  ];
+  let layoutFailures = 0;
+  for (const scheme of ['light', 'dark']) {
+    await page.emulateMedia({ colorScheme: scheme });
+    for (const width of [320, 360, 460, 800]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const [query, label] of cases) {
+        await page.fill('#searchInput', query);
+        await page.press('#searchInput', 'Enter');
+        await page.waitForSelector('#partCard:not(.hidden), #searchStatus.error', { timeout: 15000 });
+        await page.waitForTimeout(150);
+        if (width === 360 && query !== 'MANY') {
+          await page.screenshot({ path: p.join(OUT, `${scheme}-${query}.png`), fullPage: true });
+        }
+        const problems = await layoutProblems();
+        if (problems.length) {
+          layoutFailures++;
+          console.log(`FAIL  layout ${scheme} ${width}px, ${label}: ${problems.join('; ')}`);
+          await page.screenshot({ path: p.join(OUT, `layout-${scheme}-${width}-${query}.png`), fullPage: true });
+        }
+      }
+      // Settings open, with a long relay URL in the field.
+      await page.click('#settingsBtn');
+      const problems = await layoutProblems();
+      if (problems.length) {
+        layoutFailures++;
+        console.log(`FAIL  layout ${scheme} ${width}px, settings: ${problems.join('; ')}`);
+      }
+      await page.click('#settingsBtn');
+    }
+  }
+  ok(layoutFailures === 0, `layout holds: 4 parts x 4 widths (320-800 px) x 2 themes, plus Settings`);
+
+  // The page background is one continuous gradient: no seam where a second
+  // tile would start below the first screen.
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.setViewportSize({ width: 360, height: 700 });
+  await page.fill('#searchInput', 'C3235557');
+  await page.press('#searchInput', 'Enter');
+  await page.waitForSelector('#partCard:not(.hidden)', { timeout: 15000 });
+  const full = (await page.screenshot({ fullPage: true })).toString('base64');
+  const seam = await page.evaluate(async (b64) => {
+    const img = new Image();
+    img.src = `data:image/png;base64,${b64}`;
+    await img.decode();
+    const c = document.createElement('canvas');
+    c.width = img.width;
+    c.height = img.height;
+    const g = c.getContext('2d');
+    g.drawImage(img, 0, 0);
+    // Right gutter (outside the card), averaged over a few pixels, just above and below 700px.
+    const avg = (y) => {
+      const d = g.getImageData(352, y, 6, 4).data;
+      const sum = [0, 0, 0];
+      for (let i = 0; i < d.length; i += 4) for (let k = 0; k < 3; k++) sum[k] += d[i + k];
+      return sum.map((v) => v / (d.length / 4));
+    };
+    const [a, b] = [avg(692), avg(704)];
+    return Math.max(...a.map((v, k) => Math.abs(v - b[k])));
+  }, full);
+  ok(seam < 3, `page background has no seam below the first screen (step ${seam.toFixed(1)})`);
+
+  // The bare part: checks say what is missing, Install still works.
+  await page.setViewportSize({ width: 380, height: 1000 });
+  await page.fill('#searchInput', 'C9999992');
+  await page.press('#searchInput', 'Enter');
+  await page.waitForSelector('#partCard:not(.hidden)', { timeout: 15000 });
+  ok((await page.textContent('#sourceBadge')).trim() === 'Community part', 'unverified part is marked Community part');
+  ok((await page.textContent('#checksList')).includes('No 3D model'), 'missing 3D model is reported');
+  ok(!(await page.isDisabled('#installBtn')), 'a part without a 3D model can still be installed');
 
   ok(errors.length === 0, `no page errors${errors.length ? ': ' + errors.join(' / ') : ''}`);
   await ctx.close();

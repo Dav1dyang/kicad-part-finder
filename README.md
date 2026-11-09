@@ -57,6 +57,8 @@ JLCPCB and EasyEDA block extensions, so a small relay you own fetches for you. F
 
 **Checks.** "LCSC verified" means LCSC made and checked the part. "Community part" means someone else uploaded it: compare it with the datasheet before ordering boards. The pin check catches pins with no matching pad, not wrong pad sizes. Damaged files cannot be installed.
 
+**Colours.** Settings › Colours offers five combinations (Apple, Lake, Moss, Mist, Peach) for the main button and highlights. Light and dark follow your system unless you pin one.
+
 **No EasyEDA data?** The card links to Ultra Librarian, SnapMagic, and Component Search Engine (free accounts, manual download).
 
 ## Libraries
@@ -99,7 +101,7 @@ The extension talks only to your relay; the relay only to JLCPCB and EasyEDA. Fi
 pnpm test && pnpm build:extension
 ```
 
-`pnpm test:e2e` loads the built extension in Chromium against a mock relay: search, checks, 3D colours, install, and dedupe.
+`pnpm test:e2e` loads the built extension in Chromium against a mock relay: search, checks, 3D colours, install, dedupe, colour combinations, and layout at 320 to 800 px in both themes. `node packages/extension/e2e/states.cjs` renders every UI state as a light and a dark review sheet. The design language is in [packages/extension/src/sidepanel/DESIGN.md](packages/extension/src/sidepanel/DESIGN.md).
 
 `packages/extension` is the extension, `packages/relay` the relay. See [CLAUDE.md](CLAUDE.md) for contributor rules and [packages/extension/README.md](packages/extension/README.md) for internals.
 
