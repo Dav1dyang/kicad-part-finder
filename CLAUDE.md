@@ -65,7 +65,9 @@ Helper windows report back with `OVERLAY_HELPER_DONE`; the service worker rebroa
 - **The relay is versioned.** `RELAY_VERSION` in `packages/relay/src/index.ts` must equal `REQUIRED_RELAY_VERSION` in `src/lib/relay-url.ts` (a relay test enforces it). Bump both when an endpoint is added or changes shape.
 - **Browser-level shortcuts cannot be set by the extension.** `chrome.commands.getAll()` reads them; changing one means sending the user to `chrome://extensions/shortcuts`. Arc and Dia never deliver them, so the page listener forwards the same three actions as `PAGE_COMMAND`; the worker dedupes a command and its page twin within 500 ms. Panel and page shortcuts are ours and live in `src/lib/shortcuts.ts`.
 - **`open-finder` is a toggle, and `sidePanel.open()` must stay inside the gesture.** On Chrome 141+ and Dia, `sidePanel.onOpened`/`onClosed` keep an in-memory set of open windows (re-seeded from `runtime.getContexts` after a worker restart), so the toggle decides without an await, and `sidePanel.close({ windowId })` closes it. Older browsers fall back to `getContexts`, asking the panel document to `window.close()`, then a global `setOptions({ enabled: false })` and re-enable while only one window shows the panel. The floating window is minimized, not closed, so its folder grant survives. The floating window is minimized, not closed, so its folder grant survives.
-- **Pure logic goes in its own module with tests.** Everything under `src/lib` and the `preview-*`, `overlay-bounds`, `overlay-params`, `source-tab` modules is DOM-free and unit-tested. Keep it that way when adding features.
+- **Pure logic goes in its own module with tests.** Everything under `src/lib` and the `preview-*`, `obj-materials`, `overlay-bounds`, `overlay-params`, `source-tab` modules is DOM-free and unit-tested. Keep it that way when adding features.
+- **3D previews keep the model's colours.** EasyEDA writes OBJ materials inline (`newmtl … Kd … endmtl`); `obj-materials.ts` parses them and `preview-3d.ts` applies them per `usemtl` group.
+- **Plain, flat visual style.** Paper or black ground, ink type in a plain sans, thin rules, flat colour blocks. No gradients, glows, or shadows. Colour has one job each (teal ready, mustard check, vermilion error, ink for the main action); change tokens at the top of `styles.css`, not per component. Text pairs stay at 4.5:1 or better.
 
 ## Chrome extension guidance
 
@@ -79,6 +81,7 @@ pnpm test                                   # all packages
 pnpm --filter @kicad-part-finder/extension test
 pnpm --filter @kicad-part-finder/extension build
 pnpm --filter @kicad-part-finder/extension exec tsc --noEmit
+pnpm test:e2e                               # built extension in Chromium against a mock relay
 ```
 
 Load `packages/extension/dist` as an unpacked extension. After changing the manifest or the service worker, click the reload icon on `chrome://extensions`.
