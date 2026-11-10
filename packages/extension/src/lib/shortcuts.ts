@@ -41,13 +41,13 @@ export type PanelAction = (typeof PANEL_ACTIONS)[number];
 
 /** Human labels for the settings list. */
 export const PANEL_ACTION_LABELS: Record<PanelAction, string> = {
-  focusSearch: 'Focus the search box',
-  install: 'Install the current part',
-  previewSymbol: 'Show the Symbol preview',
-  previewFootprint: 'Show the Footprint preview',
-  preview3d: 'Show the 3D preview',
-  toggleSettings: 'Open or close Settings',
-  dismiss: 'Close Settings, clear the search, or close the window',
+  focusSearch: 'Focus search',
+  install: 'Install part',
+  previewSymbol: 'Symbol preview',
+  previewFootprint: 'Footprint preview',
+  preview3d: '3D preview',
+  toggleSettings: 'Settings',
+  dismiss: 'Close or clear',
 };
 
 /** Factory defaults. `Mod` = ⌘ on macOS, Ctrl elsewhere. */
@@ -67,8 +67,8 @@ export type PageAction = (typeof PAGE_ACTIONS)[number];
 
 export const PAGE_ACTION_LABELS: Record<PageAction, string> = {
   'open-finder': 'Open or close Part Finder',
-  'search-selection': 'Search the highlighted text',
-  'install-current': 'Install the part shown in Part Finder',
+  'search-selection': 'Search highlighted text',
+  'install-current': 'Install part',
 };
 
 /**
@@ -286,18 +286,18 @@ function validateAgainst(
   other: { actions: readonly string[]; labels: Readonly<Record<string, string>>; bindings: AnyBindings; kind: string },
 ): ComboValidation {
   const combo = parseCombo(text);
-  if (!combo) return { ok: false, reason: 'Press a key, optionally with modifiers.' };
+  if (!combo) return { ok: false, reason: 'Press a key, with or without modifiers.' };
   const canonical = serializeCombo(combo);
   if (RESERVED.has(canonical)) return { ok: false, reason: 'The browser uses that shortcut.' };
   if (needsModifier && !combo.mod && !combo.alt && !combo.ctrl) {
-    return { ok: false, reason: 'Needs a modifier key (⌘ / Ctrl / Alt) so it cannot fire by accident.' };
+    return { ok: false, reason: 'Add ⌘, Ctrl or Alt so it cannot fire by accident.' };
   }
   const clash = findClash(canonical, own.actions, own.bindings, own.action);
   if (clash) return { ok: false, reason: `Already used by “${own.labels[clash]}”.` };
   // Panel and page shortcuts are both live inside the finder, where the panel
   // table wins; a combo in both would silently shadow the page one there.
   const cross = findClash(canonical, other.actions, other.bindings, null);
-  if (cross) return { ok: false, reason: `Already used by the ${other.kind} shortcut “${other.labels[cross]}”.` };
+  if (cross) return { ok: false, reason: `Already used by ${other.kind} shortcut “${other.labels[cross]}”.` };
   return { ok: true };
 }
 

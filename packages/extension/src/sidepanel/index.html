@@ -18,7 +18,7 @@
       </div>
       <div class="topbar-actions">
         <!-- Float on top (Document PiP). Hidden unless the API is available. -->
-        <button id="floatBtn" class="icon-btn hidden" type="button" title="Float on top in an always-on-top window">
+        <button id="floatBtn" class="icon-btn hidden" type="button" title="Keep on top of other windows">
           <svg class="icon-svg" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="4" width="9" height="8" rx="1.5"/><path d="M6 2.5h7.5V10"/></svg>
           <span class="icon-label">Float</span>
         </button>
@@ -29,8 +29,8 @@
     </header>
 
     <!-- Context notes: only one shows at a time. -->
-    <div id="floatingNote" class="floating-note hidden"><span class="live-dot" aria-hidden="true"></span> Floating. Stays on top.</div>
-    <div id="windowNote" class="floating-note floating-note--window hidden"><span class="live-dot" aria-hidden="true"></span> Floating window. Stays open across tabs.</div>
+    <div id="floatingNote" class="floating-note hidden"><span class="live-dot" aria-hidden="true"></span> Floating on top.</div>
+    <div id="windowNote" class="floating-note floating-note--window hidden"><span class="live-dot" aria-hidden="true"></span> Stays open across tabs.</div>
 
     <!-- Readiness strip: two compact pills. -->
     <div id="readyStrip" class="ready-strip" role="group" aria-label="Setup status">
@@ -53,15 +53,15 @@
     <!-- First-run / missing setup. Relay first (needed to search), folder second (needed to install). -->
     <section id="setupView" class="setup-view hidden" aria-label="Setup">
       <div class="setup-head">
-        <h2 class="setup-title">Two steps to your first part</h2>
-        <p class="setup-sub">Both are saved on this computer only.</p>
+        <h2 class="setup-title">Two steps to start</h2>
+        <p class="setup-sub">Saved on this computer only.</p>
       </div>
 
       <div class="setup-step" id="setupStepRelay">
         <div class="setup-step-num" aria-hidden="true">1</div>
         <div class="setup-step-main">
           <div class="setup-step-title">Relay URL</div>
-          <p class="hint">The relay fetches from JLCPCB and EasyEDA for you. Deploy it once from <code>packages/relay</code>, then paste its address here.</p>
+          <p class="hint">Fetches parts for you. Deploy <code>packages/relay</code> once, then paste its URL.</p>
           <div class="relay-row">
             <input id="relayUrlInputSetup" class="text-input mono" type="url" inputmode="url"
                    placeholder="https://your-relay.workers.dev" autocomplete="off" spellcheck="false" aria-describedby="relayNoteSetup" />
@@ -74,13 +74,13 @@
       <div class="setup-step" id="setupStepLib">
         <div class="setup-step-num" aria-hidden="true">2</div>
         <div class="setup-step-main">
-          <div class="setup-step-title">KiCad library folder <span class="flag flag-quiet">needed to install</span></div>
-          <p class="hint">Pick your library root, for example <code>kicad-libraries</code>. Parts are written inside it. KiCad's global tables are never touched.</p>
+          <div class="setup-step-title">KiCad library folder <span class="flag flag-quiet">for install</span></div>
+          <p class="hint">Your library root, like <code>kicad-libraries</code>. Nothing outside it is changed.</p>
           <div class="btn-row">
-            <button id="chooseFolderBtn" class="btn btn-ghost btn-sm" type="button">Choose library folder…</button>
+            <button id="chooseFolderBtn" class="btn btn-ghost btn-sm" type="button">Choose folder…</button>
             <button id="chooseInTabBtn" class="link-btn hidden" type="button">Choose in a tab instead</button>
           </div>
-          <p id="grantModeNote" class="hint hidden">Choose the folder here. The floating window picks it up on its own. You can close this tab afterwards.</p>
+          <p id="grantModeNote" class="hint hidden">Choose the folder here. The floating window picks it up, then you can close this tab.</p>
         </div>
       </div>
 
@@ -96,7 +96,7 @@
                  placeholder="https://your-relay.workers.dev" autocomplete="off" spellcheck="false" aria-describedby="relayNote" />
           <button id="relayTestBtn" class="btn btn-ghost btn-sm" type="button">Test</button>
         </div>
-        <div id="relayNote" class="field-note" aria-live="polite">Deployed from <code>packages/relay</code>. Vercel deployments end in <code>/api</code>.</div>
+        <div id="relayNote" class="field-note" aria-live="polite">Vercel URLs end in <code>/api</code>.</div>
       </div>
 
       <div class="setting-block">
@@ -112,7 +112,7 @@
           </div>
         </div>
         <div id="libConfigNote" class="field-note" aria-live="polite"></div>
-        <p class="hint">To register the libraries in KiCad once: add the path variable under Preferences › Configure Paths, pointing at your library folder. Then, with KiCad closed, paste these rows into <code>sym-lib-table</code> and <code>fp-lib-table</code> in KiCad's settings folder.</p>
+        <p class="hint">One-time KiCad setup: add the path variable in Preferences › Configure Paths. Then, with KiCad closed, paste these rows into <code>sym-lib-table</code> and <code>fp-lib-table</code>.</p>
         <div class="btn-row">
           <button id="copySymRowsBtn" class="btn btn-ghost btn-sm" type="button">Copy symbol rows</button>
           <button id="copyFpRowsBtn" class="btn btn-ghost btn-sm" type="button">Copy footprint rows</button>
@@ -124,7 +124,7 @@
         <div id="openModeSelector" class="segmented" role="radiogroup" aria-labelledby="openModeLabel">
           <label class="segment">
             <input class="segment-input" type="radio" name="openMode" value="auto" />
-            <span class="segment-face"><span class="segment-title">Side panel</span><span class="segment-hint">Default. Chrome, Edge, Brave, Dia. Opens a tab where there is no side panel.</span></span>
+            <span class="segment-face"><span class="segment-title">Side panel</span><span class="segment-hint">Chrome, Edge, Brave, Dia.</span></span>
           </label>
           <label class="segment">
             <input class="segment-input" type="radio" name="openMode" value="window" />
@@ -132,10 +132,10 @@
           </label>
           <label class="segment">
             <input class="segment-input" type="radio" name="openMode" value="overlay" />
-            <span class="segment-face"><span class="segment-title">In-page overlay</span><span class="segment-hint">A draggable panel on the current page.</span></span>
+            <span class="segment-face"><span class="segment-title">In-page overlay</span><span class="segment-hint">A panel on the page.</span></span>
           </label>
         </div>
-        <p id="windowModeNote" class="setting-note hidden" role="status">Applies the next time you open Part Finder.</p>
+        <p id="windowModeNote" class="setting-note hidden" role="status">Applies next time you open it.</p>
       </div>
 
       <div class="setting-block">
@@ -148,16 +148,21 @@
       </div>
 
       <div class="setting-block">
+        <span class="micro-label" id="paletteLabel">Colours</span>
+        <div id="paletteSelector" class="palette-row" role="radiogroup" aria-labelledby="paletteLabel"></div>
+      </div>
+
+      <div class="setting-block">
         <label class="switch-row" for="selectionSearchToggle">
           <span class="switch-text">
-            <span class="switch-title">Search when I highlight text on a page</span>
-            <span class="switch-hint">Off: use the “Search highlighted text” shortcut instead.</span>
+            <span class="switch-title">Search highlighted text</span>
+            <span class="switch-hint">Off: use the shortcut instead.</span>
           </span>
           <input id="selectionSearchToggle" class="switch-input" type="checkbox" role="switch" />
           <span class="switch-track" aria-hidden="true"></span>
         </label>
         <div id="allSitesRow" class="perm-row hidden">
-          <span class="hint">Works on the page where you opened the finder. To make it work everywhere after you navigate, allow all sites.</span>
+          <span class="hint">Works on the page you opened Part Finder from. Allow all sites to use it everywhere.</span>
           <button id="allSitesBtn" class="btn btn-ghost btn-sm" type="button">Allow on all sites</button>
         </div>
       </div>
@@ -168,11 +173,11 @@
           <span class="disclosure-hint" aria-hidden="true"></span>
         </summary>
         <div class="shortcuts-body">
-        <p class="hint">Browser shortcuts work on any page and even when the finder is closed. Chrome manages them, so changing one opens Chrome's shortcut page. Arc and Dia ignore them.</p>
+        <p class="hint">Browser shortcuts work anywhere, even with Part Finder closed. Change them in Chrome. Arc and Dia ignore them.</p>
         <div id="browserShortcuts" class="shortcut-list" role="list"></div>
-        <p class="hint">Page shortcuts do the same jobs, but Part Finder listens for them itself. They work on DigiKey, LCSC, the page where you opened the finder, and everywhere once you allow all sites above. Click a key to change it. Press Escape to cancel or Backspace to remove it.</p>
+        <p class="hint">Page shortcuts do the same jobs and also work in Arc and Dia. Click a key to change it. Esc cancels, Backspace clears.</p>
         <div id="pageShortcuts" class="shortcut-list" role="list"></div>
-        <p class="hint">Panel shortcuts work while the finder is focused.</p>
+        <p class="hint">Panel shortcuts work while Part Finder is focused.</p>
         <div id="panelShortcuts" class="shortcut-list" role="list"></div>
         <button id="resetShortcutsBtn" class="link-btn" type="button">Reset all shortcuts</button>
         </div>
@@ -215,18 +220,18 @@
         <div class="card-head-top">
           <a id="cardLcsc" class="lcsc-chip mono" target="_blank" rel="noopener" title="Open on LCSC">C—</a>
           <span id="sourceBadge" class="source-badge hidden"></span>
-          <span id="stockBadge" class="stock-badge hidden"></span>
         </div>
         <h2 id="cardMpn" class="card-mpn mono"></h2>
         <div id="cardSub" class="card-sub"></div>
+        <span id="stockBadge" class="stock-badge hidden"></span>
       </header>
 
       <div class="card-body">
         <section class="preview" aria-label="Previews">
           <div class="preview-tabs" role="tablist" aria-label="Preview type">
-            <button id="previewTabSymbol" class="preview-tab is-active" role="tab" type="button" aria-selected="true" aria-controls="previewPaneSymbol" data-preview="symbol">Symbol <kbd class="tab-kbd" data-shortcut="previewSymbol"></kbd></button>
-            <button id="previewTabFootprint" class="preview-tab" role="tab" type="button" aria-selected="false" aria-controls="previewPaneFootprint" data-preview="footprint" tabindex="-1">Footprint <kbd class="tab-kbd" data-shortcut="previewFootprint"></kbd></button>
-            <button id="previewTab3d" class="preview-tab" role="tab" type="button" aria-selected="false" aria-controls="previewPane3d" data-preview="3d" tabindex="-1">3D <kbd class="tab-kbd" data-shortcut="preview3d"></kbd></button>
+            <button id="previewTabSymbol" class="preview-tab is-active" role="tab" type="button" aria-selected="true" aria-controls="previewPaneSymbol" data-preview="symbol" data-shortcut-title="previewSymbol">Symbol</button>
+            <button id="previewTabFootprint" class="preview-tab" role="tab" type="button" aria-selected="false" aria-controls="previewPaneFootprint" data-preview="footprint" data-shortcut-title="previewFootprint" tabindex="-1">Footprint</button>
+            <button id="previewTab3d" class="preview-tab" role="tab" type="button" aria-selected="false" aria-controls="previewPane3d" data-preview="3d" data-shortcut-title="preview3d" tabindex="-1">3D</button>
           </div>
           <div class="preview-stage">
             <div id="previewPaneSymbol" class="preview-pane is-active" role="tabpanel" aria-labelledby="previewTabSymbol" tabindex="0"></div>
@@ -290,7 +295,7 @@
         <div id="successPanel" class="success-panel hidden">
           <ul id="writtenList" class="written-list"></ul>
           <p id="restartNote" class="restart-note hidden">New library file. Restart KiCad to see it.</p>
-          <p id="reloadNote" class="restart-note hidden">In KiCad, reload the library (or restart) to see the new part.</p>
+          <p id="reloadNote" class="restart-note hidden">Reload the library in KiCad to see it.</p>
           <button id="installAnotherBtn" class="btn btn-ghost btn-block" type="button">Install another</button>
           <button id="closeHelperBtn" class="btn btn-ghost btn-block hidden" type="button">Close this window</button>
         </div>
@@ -299,7 +304,7 @@
 
     <!-- Secondary sources -->
     <section id="secondarySources" class="sources hidden" aria-label="Other sources">
-      <div class="sources-label">Also search on</div>
+      <div class="sources-label">Other sources</div>
       <div id="sourceLinks" class="source-links"></div>
     </section>
   </div>

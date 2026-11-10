@@ -283,15 +283,20 @@ export function parseFootprint(text: string): FootprintModel | null {
 // --- Rendering ---------------------------------------------------------------
 
 /** Colours, read from the design tokens so the preview matches the card. */
+/**
+ * Theme tokens only, so drawings follow light, dark, and the chosen colours.
+ * Pads use the main colour with its own ink for numbers, the same pairing as
+ * the Install button, so labels always read.
+ */
 const COLORS = {
-  pad: 'var(--accent)',
-  padStroke: 'var(--accent-bright)',
-  padLabel: '#04130c',
-  silk: 'rgba(231, 232, 236, 0.78)',
-  courtyard: 'rgba(224, 166, 75, 0.55)',
-  fab: 'rgba(158, 160, 170, 0.4)',
-  origin: 'rgba(95, 214, 160, 0.7)',
-  hole: '#0c0d10',
+  pad: 'var(--btn-primary)',
+  padStroke: 'color-mix(in oklab, var(--btn-primary-ink) 40%, transparent)',
+  padLabel: 'var(--btn-primary-ink)',
+  silk: 'color-mix(in oklab, var(--text-dim) 50%, transparent)',
+  courtyard: 'color-mix(in oklab, var(--warn) 65%, transparent)',
+  fab: 'color-mix(in oklab, var(--text-faint) 55%, transparent)',
+  origin: 'color-mix(in oklab, var(--accent) 45%, transparent)',
+  hole: 'var(--surface-1)',
 };
 
 function el(name: string, attrs: Record<string, string | number>): SVGElement {

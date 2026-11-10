@@ -9,7 +9,8 @@
     "build": "pnpm -r build",
     "build:extension": "pnpm --filter @kicad-part-finder/extension build",
     "test": "pnpm -r test",
-    "test:extension": "pnpm --filter @kicad-part-finder/extension test"
+    "test:extension": "pnpm --filter @kicad-part-finder/extension test",
+    "test:e2e": "pnpm --filter @kicad-part-finder/extension test:e2e"
   },
   "devDependencies": {
     "typescript": "^5.7.0"

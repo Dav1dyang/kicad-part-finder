@@ -9,6 +9,10 @@ Manifest V3 Chrome extension that finds EasyEDA/LCSC parts and installs KiCad sy
 - **The UI document** (`src/sidepanel/`) is the same page in every mode. It searches and converts through the relay, previews the symbol, footprint, and 3D model, runs `verifyPart` (provenance and pin/pad checks), then writes files with the File System Access API, named by the user's library prefix and path variable (`src/lib/library-config.ts`).
 - **The relay** (`packages/relay`) does the real JLCPCB and EasyEDA fetches. Both sites block browser requests. The relay URL is stored in `chrome.storage.local` under `relayUrl` and passed to every network helper as `relayBase`.
 
+## Design
+
+The look and every component's style follow one language, described in [src/sidepanel/DESIGN.md](src/sidepanel/DESIGN.md). Colour combinations live in `src/lib/palettes.ts`.
+
 ## Setup
 
 1. Deploy the relay. See `packages/relay/README.md`.

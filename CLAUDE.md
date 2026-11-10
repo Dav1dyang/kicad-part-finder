@@ -47,6 +47,7 @@ Helper windows report back with `OVERLAY_HELPER_DONE`; the service worker rebroa
 | `overlayLibraryName` | `chrome.storage.local` | Folder name mirror for the overlay iframe, which cannot hold the handle |
 | `selectionSearch` | `chrome.storage.local` | Whether highlighting text searches automatically (default on) |
 | `theme` | `chrome.storage.local` | `system`, `dark`, or `light` |
+| `palette` | `chrome.storage.local` | Colour combination id from `src/lib/palettes.ts` (default `apple`) |
 | `panelShortcuts` | `chrome.storage.sync` | Customized panel shortcuts (`action -> "Mod+Enter"` strings) |
 | `pageShortcuts` | `chrome.storage.sync` | Customized page shortcuts, the browser commands' twins (`open-finder -> "Mod+Shift+k"`) |
 | `libraryFolder` | IndexedDB `kicad-part-finder/handles` | The `FileSystemDirectoryHandle` |
@@ -65,7 +66,9 @@ Helper windows report back with `OVERLAY_HELPER_DONE`; the service worker rebroa
 - **The relay is versioned.** `RELAY_VERSION` in `packages/relay/src/index.ts` must equal `REQUIRED_RELAY_VERSION` in `src/lib/relay-url.ts` (a relay test enforces it). Bump both when an endpoint is added or changes shape.
 - **Browser-level shortcuts cannot be set by the extension.** `chrome.commands.getAll()` reads them; changing one means sending the user to `chrome://extensions/shortcuts`. Arc and Dia never deliver them, so the page listener forwards the same three actions as `PAGE_COMMAND`; the worker dedupes a command and its page twin within 500 ms. Panel and page shortcuts are ours and live in `src/lib/shortcuts.ts`.
 - **`open-finder` is a toggle, and `sidePanel.open()` must stay inside the gesture.** On Chrome 141+ and Dia, `sidePanel.onOpened`/`onClosed` keep an in-memory set of open windows (re-seeded from `runtime.getContexts` after a worker restart), so the toggle decides without an await, and `sidePanel.close({ windowId })` closes it. Older browsers fall back to `getContexts`, asking the panel document to `window.close()`, then a global `setOptions({ enabled: false })` and re-enable while only one window shows the panel. The floating window is minimized, not closed, so its folder grant survives. The floating window is minimized, not closed, so its folder grant survives.
-- **Pure logic goes in its own module with tests.** Everything under `src/lib` and the `preview-*`, `overlay-bounds`, `overlay-params`, `source-tab` modules is DOM-free and unit-tested. Keep it that way when adding features.
+- **Pure logic goes in its own module with tests.** Everything under `src/lib` and the `preview-*`, `obj-materials`, `overlay-bounds`, `overlay-params`, `source-tab` modules is DOM-free and unit-tested. Keep it that way when adding features.
+- **3D previews keep the model's colours.** EasyEDA writes OBJ materials inline (`newmtl … Kd … endmtl`); `obj-materials.ts` parses them and `preview-3d.ts` applies them per `usemtl` group.
+- **One design language: Soft Fields.** `src/sidepanel/DESIGN.md` is the source of truth: principles, colour roles, the primitive each component uses, and the layering rules for soft edges. Change tokens at the top of `styles.css`, not per component; main and accent colours come from `src/lib/palettes.ts` at runtime. Every gradient interpolates in OKLab. Text pairs stay at 4.5:1 (palette contrast is unit-tested). After a visual change, run `node e2e/states.cjs` and review both sheets against DESIGN.md.
 
 ## Chrome extension guidance
 
@@ -79,6 +82,8 @@ pnpm test                                   # all packages
 pnpm --filter @kicad-part-finder/extension test
 pnpm --filter @kicad-part-finder/extension build
 pnpm --filter @kicad-part-finder/extension exec tsc --noEmit
+pnpm test:e2e                               # built extension in Chromium against a mock relay
+node packages/extension/e2e/states.cjs      # every UI state, light and dark, as two review sheets
 ```
 
 Load `packages/extension/dist` as an unpacked extension. After changing the manifest or the service worker, click the reload icon on `chrome://extensions`.
