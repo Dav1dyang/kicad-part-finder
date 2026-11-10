@@ -95,3 +95,70 @@ export function detectPrefix(symbolFileNames: readonly string[]): string | null 
   return best;
 }
 
+
+/** What the setup hint needs to know about the chosen folder. */
+export interface FolderSetupInfo {
+  name: string;
+  hasSetupScript: boolean;
+  /** `tables/sym-lib-table.fragment` text, '' when absent. */
+  symTableFragment: string;
+}
+
+/** `nickname -> uri` for every `(lib …)` row in a library table or fragment. */
+export function parseTableRows(text: string): Map<string, string> {
+  const rows = new Map<string, string>();
+  for (const m of text.matchAll(/\(lib\s*\(name\s+"([^"]+)"\)[^\n]*?\(uri\s+"([^"]+)"\)/g)) rows.set(m[1], m[2]);
+  return rows;
+}
+
+/**
+ * Libraries these settings install into that a folder's own table fragment
+ * does not register the same way (missing, or another URI). Empty when the
+ * fragment matches, or when there is no fragment to compare.
+ */
+export function fragmentMismatches(fragment: string, config: LibraryConfig): string[] {
+  const theirs = parseTableRows(fragment);
+  if (theirs.size === 0) return [];
+  const ours = parseTableRows(libraryTableRows(config).symbols);
+  return [...ours].filter(([name, uri]) => theirs.get(name) !== uri).map(([name]) => name);
+}
+
+/**
+ * The one-time KiCad setup, as one paragraph. A folder that ships its own
+ * `tools/setup` (kicad-libraries does) is set up by running that script,
+ * unless its tables register different names than these settings.
+ */
+export function setupHint(config: LibraryConfig, folder: FolderSetupInfo | null): string {
+  const target = folder ? `“${folder.name}”` : 'your library folder';
+  const manual =
+    `In KiCad, open Preferences › Configure Paths and set ${config.pathVar} to ${target}. ` +
+    'Then quit KiCad and paste these rows just before the last ) of sym-lib-table and fp-lib-table, in KiCad’s settings folder.';
+  if (!folder?.hasSetupScript) return `One-time setup. ${manual}`;
+  const off = fragmentMismatches(folder.symTableFragment, config);
+  if (off.length) {
+    const names = off.slice(0, 2).join(', ') + (off.length > 2 ? ', …' : '');
+    return (
+      `${target} has a setup script, but it registers different libraries than these settings (${names}). ` +
+      `Match the prefix and path variable to the folder, or set up by hand. ${manual}`
+    );
+  }
+  return (
+    `${target} has a setup script. Quit KiCad, run ./tools/setup in that folder, then reopen KiCad. ` +
+    `It sets ${config.pathVar} and adds every library. The rows below are only for setting up by hand.`
+  );
+}
+
+/** What the commit reminder needs to know about the chosen folder. */
+export interface FolderGitInfo {
+  name: string;
+  isGitRepo: boolean;
+  hasCatalogScript: boolean;
+}
+
+/** After an install into a git repo, say what to do so the new files are saved. '' otherwise. */
+export function commitReminder(folder: FolderGitInfo | null): string {
+  if (!folder?.isGitRepo) return '';
+  return folder.hasCatalogScript
+    ? `Run ./tools/catalog, then commit the new files in “${folder.name}”.`
+    : `Commit the new files in “${folder.name}” so they are saved in git.`;
+}

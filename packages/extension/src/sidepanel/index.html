@@ -112,7 +112,7 @@
           </div>
         </div>
         <div id="libConfigNote" class="field-note" aria-live="polite"></div>
-        <p class="hint">One-time KiCad setup: add the path variable in Preferences › Configure Paths. Then, with KiCad closed, paste these rows into <code>sym-lib-table</code> and <code>fp-lib-table</code>.</p>
+        <p id="libSetupHint" class="hint">One-time setup. In KiCad, open Preferences › Configure Paths and set the path variable to your library folder. Then quit KiCad and paste these rows just before the last ) of sym-lib-table and fp-lib-table, in KiCad’s settings folder.</p>
         <div class="btn-row">
           <button id="copySymRowsBtn" class="btn btn-ghost btn-sm" type="button">Copy symbol rows</button>
           <button id="copyFpRowsBtn" class="btn btn-ghost btn-sm" type="button">Copy footprint rows</button>
@@ -294,8 +294,9 @@
 
         <div id="successPanel" class="success-panel hidden">
           <ul id="writtenList" class="written-list"></ul>
-          <p id="restartNote" class="restart-note hidden">New library file. Restart KiCad to see it.</p>
+          <p id="restartNote" class="restart-note hidden">New library file. Restart KiCad. If it is still missing, add its rows from Settings › KiCad libraries.</p>
           <p id="reloadNote" class="restart-note hidden">Reload the library in KiCad to see it.</p>
+          <p id="commitNote" class="restart-note hidden"></p>
           <button id="installAnotherBtn" class="btn btn-ghost btn-block" type="button">Install another</button>
           <button id="closeHelperBtn" class="btn btn-ghost btn-block hidden" type="button">Close this window</button>
         </div>

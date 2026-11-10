@@ -162,12 +162,34 @@ describe('inspectLibraryFolder', () => {
     const sym = await root.getDirectoryHandle('symbols', { create: true });
     await sym.getFileHandle('Lab_IC.kicad_sym', { create: true });
     await sym.getFileHandle('notes.txt', { create: true });
-    expect(await inspectLibraryFolder(asRoot(root))).toEqual({ hasSymbols: true, hasFootprints: false, symbolFiles: ['Lab_IC.kicad_sym'] });
+    expect(await inspectLibraryFolder(asRoot(root))).toMatchObject({ hasSymbols: true, hasFootprints: false, symbolFiles: ['Lab_IC.kicad_sym'], isGitRepo: false, hasSetupScript: false });
+  });
+
+  it('spots a git repo with setup and catalog scripts and a table fragment', async () => {
+    const root = new MemDir('kicad-libraries');
+    await root.getDirectoryHandle('.git', { create: true });
+    const tools = await root.getDirectoryHandle('tools', { create: true });
+    await tools.getFileHandle('setup', { create: true });
+    await tools.getFileHandle('catalog', { create: true });
+    const tables = await root.getDirectoryHandle('tables', { create: true });
+    (await tables.getFileHandle('sym-lib-table.fragment', { create: true })).data = '  (lib (name "A")(type "KiCad")(uri "x")(options "")(descr ""))\n';
+    expect(await inspectLibraryFolder(asRoot(root))).toMatchObject({
+      isGitRepo: true,
+      hasSetupScript: true,
+      hasCatalogScript: true,
+      symTableFragment: expect.stringContaining('(name "A")'),
+    });
+  });
+
+  it('treats a .git file (worktree) as a git repo', async () => {
+    const root = new MemDir();
+    await root.getFileHandle('.git', { create: true });
+    expect((await inspectLibraryFolder(asRoot(root))).isGitRepo).toBe(true);
   });
 
   it('reports an empty folder, and never throws on an unreadable one', async () => {
-    expect(await inspectLibraryFolder(asRoot(new MemDir()))).toEqual({ hasSymbols: false, hasFootprints: false, symbolFiles: [] });
+    expect(await inspectLibraryFolder(asRoot(new MemDir()))).toEqual({ hasSymbols: false, hasFootprints: false, symbolFiles: [], isGitRepo: false, hasSetupScript: false, hasCatalogScript: false, symTableFragment: '' });
     const broken = { async *[Symbol.asyncIterator]() { throw new Error('denied'); } };
-    expect(await inspectLibraryFolder(broken as unknown as FileSystemDirectoryHandle)).toEqual({ hasSymbols: false, hasFootprints: false, symbolFiles: [] });
+    expect(await inspectLibraryFolder(broken as unknown as FileSystemDirectoryHandle)).toEqual({ hasSymbols: false, hasFootprints: false, symbolFiles: [], isGitRepo: false, hasSetupScript: false, hasCatalogScript: false, symTableFragment: '' });
   });
 });

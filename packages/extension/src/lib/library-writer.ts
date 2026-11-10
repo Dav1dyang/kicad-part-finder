@@ -593,19 +593,60 @@ export interface FolderContents {
   hasFootprints: boolean;
   /** File names in `symbols/`, for prefix detection. */
   symbolFiles: string[];
+  /** A `.git` entry at the root: installs leave changes to commit. */
+  isGitRepo: boolean;
+  /** `tools/setup`, which registers the libraries in KiCad (kicad-libraries has one). */
+  hasSetupScript: boolean;
+  /** `tools/catalog`, which regenerates the folder's part index. */
+  hasCatalogScript: boolean;
+  /** Text of `tables/sym-lib-table.fragment`, or '' when absent. */
+  symTableFragment: string;
+}
+
+/** Names of the files directly inside a directory entry. Never throws. */
+async function fileNames(dir: FileSystemHandle): Promise<string[]> {
+  const out: string[] = [];
+  try {
+    for await (const [file, child] of (dir as unknown as AsyncIterable<[string, FileSystemHandle]>)) {
+      if (child.kind === 'file') out.push(file);
+    }
+  } catch {
+    /* unreadable */
+  }
+  return out;
 }
 
 /** Look inside a granted folder without changing it. Never throws. */
 export async function inspectLibraryFolder(root: FileSystemDirectoryHandle): Promise<FolderContents> {
-  const out: FolderContents = { hasSymbols: false, hasFootprints: false, symbolFiles: [] };
+  const out: FolderContents = {
+    hasSymbols: false,
+    hasFootprints: false,
+    symbolFiles: [],
+    isGitRepo: false,
+    hasSetupScript: false,
+    hasCatalogScript: false,
+    symTableFragment: '',
+  };
   try {
     for await (const [name, entry] of (root as unknown as AsyncIterable<[string, FileSystemHandle]>)) {
+      // A worktree or submodule has a `.git` file instead of a folder.
+      if (name === '.git') out.isGitRepo = true;
       if (entry.kind !== 'directory') continue;
       if (name === 'footprints') out.hasFootprints = true;
       if (name === 'symbols') {
         out.hasSymbols = true;
-        for await (const [file, child] of (entry as unknown as AsyncIterable<[string, FileSystemHandle]>)) {
-          if (child.kind === 'file' && file.endsWith('.kicad_sym')) out.symbolFiles.push(file);
+        out.symbolFiles = (await fileNames(entry)).filter((f) => f.endsWith('.kicad_sym'));
+      }
+      if (name === 'tools') {
+        const tools = await fileNames(entry);
+        out.hasSetupScript = tools.includes('setup');
+        out.hasCatalogScript = tools.includes('catalog');
+      }
+      if (name === 'tables') {
+        try {
+          out.symTableFragment = await readFileText(entry as FileSystemDirectoryHandle, 'sym-lib-table.fragment');
+        } catch {
+          /* unreadable: treat as absent */
         }
       }
     }
