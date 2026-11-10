@@ -173,6 +173,39 @@ const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'}  ${msg}`); if
   const savedPalette = await sw.evaluate(() => chrome.storage.local.get('palette'));
   ok(before !== after && savedPalette.palette === 'lake', `colour combination applies and is saved (${before} -> ${after})`);
   await page.screenshot({ path: p.join(OUT, 'settings-lake.png'), fullPage: true });
+
+  // Every combination tints the whole page, in both themes: the painted
+  // background's hue must follow the main colour (Lake blue, Peach warm...).
+  const hueOf = (rgb) => {
+    const [r, g, b] = rgb.map((v) => v / 255);
+    const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+    if (d < 0.004) return null;
+    const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return (h * 60 + 360) % 360;
+  };
+  const near = (a, b, tol) => Math.abs(((a - b + 540) % 360) - 180) <= tol;
+  const paletteIds = await page.$$eval('#paletteSelector input', (els) => els.map((e) => e.value));
+  ok(paletteIds.length === 5, `five colour combinations offered (${paletteIds.join(', ')})`);
+  for (const theme of ['light', 'dark']) {
+    await page.click(`#themeSelector label:has(input[value="${theme}"])`);
+    for (const id of paletteIds) {
+      await page.click(`.palette-choice:has(input[value="${id}"])`);
+      await page.waitForTimeout(80);
+      const r = await page.evaluate(() => {
+        const css = getComputedStyle(document.documentElement);
+        const hex = (v) => { const m = v.trim().match(/^#([0-9a-f]{6})$/i); return m ? [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16)) : null; };
+        const bg = getComputedStyle(document.body).backgroundColor.match(/\d+/g).slice(0, 3).map(Number);
+        return { main: hex(css.getPropertyValue('--btn-primary')), surface: hex(css.getPropertyValue('--surface-2')), bg, ground: css.getPropertyValue('--ground'), accent: css.getPropertyValue('--accent').trim() };
+      });
+      // Apple dark keeps its original deep green ground (#2a372c), by design.
+      const want = id === 'apple' && theme === 'dark' ? hueOf([42, 55, 44]) : hueOf(r.main);
+      const got = [hueOf(r.bg), hueOf(r.surface)];
+      const single = !r.ground.includes(r.accent);
+      ok(got.every((h) => h !== null && near(h, want, 30)) && single,
+        `${id} ${theme}: page and surfaces follow the main colour (hue ${want?.toFixed(0)}: bg ${got[0]?.toFixed(0)}, field ${got[1]?.toFixed(0)}), ground has no accent`);
+    }
+  }
+  await page.click('#themeSelector label:has(input[value="system"])');
   await page.click('.palette-choice:has(input[value="apple"])');
 
   await page.click('#settingsBtn');
@@ -278,6 +311,42 @@ const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'}  ${msg}`); if
   ok((await page.textContent('#sourceBadge')).trim() === 'Community part', 'unverified part is marked Community part');
   ok((await page.textContent('#checksList')).includes('No 3D model'), 'missing 3D model is reported');
   ok(!(await page.isDisabled('#installBtn')), 'a part without a 3D model can still be installed');
+
+  // Reopening the panel: Chrome has dropped the folder grant (it does when every
+  // Part Finder page closes). The panel must not fall back to first-run setup,
+  // and Install must re-ask inside its own click, with no picker.
+  const lapsed = await ctx.newPage();
+  lapsed.on('pageerror', (e) => errors.push(e.message));
+  await lapsed.setViewportSize({ width: 380, height: 1000 });
+  await lapsed.addInitScript(() => {
+    let granted = false;
+    window.__asks = [];
+    FileSystemHandle.prototype.queryPermission = async () => (granted ? 'granted' : 'prompt');
+    FileSystemHandle.prototype.requestPermission = async () => {
+      const gesture = navigator.userActivation.isActive;
+      window.__asks.push(gesture);
+      if (!gesture) return 'denied';
+      granted = true;
+      return 'granted';
+    };
+    window.showDirectoryPicker = async () => { window.__picker = true; throw new DOMException('no', 'AbortError'); };
+  });
+  await lapsed.goto(`chrome-extension://${id}/src/sidepanel/index.html`);
+  await lapsed.waitForTimeout(500);
+  ok((await lapsed.textContent('#libPillValue')).trim() === 'Reconnect folder', 'lapsed grant: Library says Reconnect folder');
+  ok(await lapsed.isHidden('#setupView'), 'lapsed grant: no first-run setup screen');
+  ok((await lapsed.textContent('#searchHint')).includes('Install reconnects'), `lapsed grant hint: "${(await lapsed.textContent('#searchHint')).trim()}"`);
+  await lapsed.fill('#searchInput', 'C3235557');
+  await lapsed.press('#searchInput', 'Enter');
+  await lapsed.waitForSelector('#partCard:not(.hidden)', { timeout: 15000 });
+  ok(!(await lapsed.isDisabled('#installBtn')), 'lapsed grant: Install stays available');
+  await lapsed.click('#installBtn');
+  await lapsed.waitForSelector('#installBtn.is-done', { timeout: 15000 });
+  const asks = await lapsed.evaluate(() => window.__asks);
+  const picker = await lapsed.evaluate(() => window.__picker === true);
+  ok(asks.length === 1 && asks[0] === true && !picker, `Install re-asks once, inside the click, no picker (asks: ${JSON.stringify(asks)})`);
+  ok((await lapsed.textContent('#libPillValue')).trim() === 'kicad-lib', 'after reconnecting, Library shows the folder');
+  await lapsed.close();
 
   ok(errors.length === 0, `no page errors${errors.length ? ': ' + errors.join(' / ') : ''}`);
   await ctx.close();

@@ -22,15 +22,15 @@
  */
 
 :root {
-  --bg: #eef3ea;
+  --bg: #eef3e9;
   --surface-1: #fafcf6;
-  --surface-2: #eff3e8;
+  --surface-2: #eef3e8;
   --surface-3: #e4ebdc;
-  --line: rgba(24, 46, 40, 0.13);
-  --line-strong: rgba(24, 46, 40, 0.32);
-  --text: #17281f;
-  --text-dim: #3f5148;
-  --text-faint: #516158;
+  --line: color-mix(in oklab, #202717 13%, transparent);
+  --line-strong: color-mix(in oklab, #202717 32%, transparent);
+  --text: #202717;
+  --text-dim: #484f3f;
+  --text-faint: #575e4f;
   --ok: #2f8f3a;
   --ok-ink: #226b2b;
   --ok-wash: #e2f1d6;
@@ -48,7 +48,7 @@
   --btn-primary-ink: #1f3a1c;
   --tile: linear-gradient(180deg in oklab, #f6f8ee 0%, #dcebb4 55%, #a9d38c 100%);
   --mark: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='4' fill='%239cc93f'/><rect x='4' y='8' width='8' height='5' fill='%23f8faf4'/><path d='M3 8.4 8 4l5 4.4z' fill='%231c3a6e'/><rect x='7' y='10' width='2' height='3' fill='%231c3a6e'/></svg>");
-  --paper: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.08  0 0 0 0 0.18  0 0 0 0 0.14  0 0 0 0.06 0'/></filter><filter id='f'><feTurbulence type='fractalNoise' baseFrequency='.012 .11' numOctaves='3' seed='7' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.08  0 0 0 0 0.18  0 0 0 0 0.14  0 0 0 0.04 0'/></filter><filter id='s'><feTurbulence type='turbulence' baseFrequency='.9' numOctaves='1' seed='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 -9 0.85'/><feComponentTransfer><feFuncA type='discrete' tableValues='0 0 0 0 0 0 1'/></feComponentTransfer></filter><rect width='240' height='240' filter='url(%23g)'/><rect width='240' height='240' filter='url(%23f)'/><rect width='240' height='240' filter='url(%23s)' opacity='.55'/></svg>");
+  --paper: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.12  0 0 0 0 0.12  0 0 0 0 0.12  0 0 0 0.06 0'/></filter><filter id='f'><feTurbulence type='fractalNoise' baseFrequency='.012 .11' numOctaves='3' seed='7' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.12  0 0 0 0 0.12  0 0 0 0 0.12  0 0 0 0.04 0'/></filter><filter id='s'><feTurbulence type='turbulence' baseFrequency='.9' numOctaves='1' seed='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 -9 0.85'/><feComponentTransfer><feFuncA type='discrete' tableValues='0 0 0 0 0 0 1'/></feComponentTransfer></filter><rect width='240' height='240' filter='url(%23g)'/><rect width='240' height='240' filter='url(%23f)'/><rect width='240' height='240' filter='url(%23s)' opacity='.55'/></svg>");
   --font-ui:   'Helvetica Neue', Helvetica, Arial, system-ui, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   --radius:      14px;  /* cards, panels */
@@ -57,21 +57,21 @@
   --radius-pill: 999px; /* chips, badges, switches */
   --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--text);
   --mist: radial-gradient(farthest-corner at 50% 45% in oklab, rgba(255, 255, 255, 0) 35%, rgba(255, 255, 255, 0.5) 100%);
-  --ground: radial-gradient(70% 38% at 100% 0% in oklab, rgba(196, 226, 120, 0.32), transparent 70%), radial-gradient(80% 45% at 0% 100% in oklab, rgba(236, 214, 178, 0.38), transparent 70%), linear-gradient(180deg in oklab, #f5f8ef 0%, #eef3ea 45%, #f2f1e8 100%);
+  --ground: radial-gradient(75% 40% at 100% 0% in oklab, color-mix(in oklab, #c8e4a2 34%, transparent), transparent 70%), linear-gradient(180deg in oklab, #f5f9f0 0%, #eef3e9 45%, #eaf1e2 100%);
   color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
     --bg: #2a372c;
-    --surface-1: #334136;
+    --surface-1: #334135;
     --surface-2: #3c4b3f;
-    --surface-3: #46574a;
-    --line: rgba(232, 240, 226, 0.13);
-    --line-strong: rgba(232, 240, 226, 0.32);
-    --text: #eef2e8;
-    --text-dim: #d0d8c9;
-    --text-faint: #b8c3b2;
+    --surface-3: #475749;
+    --line: color-mix(in oklab, #eaf3eb 13%, transparent);
+    --line-strong: color-mix(in oklab, #eaf3eb 32%, transparent);
+    --text: #eaf3eb;
+    --text-dim: #cbd9cd;
+    --text-faint: #b4c4b6;
     --ok: #8fd16f;
     --ok-ink: #c3ebae;
     --ok-wash: #3b5a38;
@@ -91,20 +91,20 @@
     --mark: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='4' fill='%239cc93f'/><rect x='4' y='8' width='8' height='5' fill='%23ecf2e6'/><path d='M3 8.4 8 4l5 4.4z' fill='%231c3a6e'/><rect x='7' y='10' width='2' height='3' fill='%231c3a6e'/></svg>");
     --paper: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 0.95  0 0 0 0.04 0'/></filter><filter id='f'><feTurbulence type='fractalNoise' baseFrequency='.012 .11' numOctaves='3' seed='7' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 0.95  0 0 0 0.025 0'/></filter><filter id='s'><feTurbulence type='turbulence' baseFrequency='.9' numOctaves='1' seed='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 -9 0.5'/><feComponentTransfer><feFuncA type='discrete' tableValues='0 0 0 0 0 0 1'/></feComponentTransfer></filter><rect width='240' height='240' filter='url(%23g)'/><rect width='240' height='240' filter='url(%23f)'/><rect width='240' height='240' filter='url(%23s)' opacity='.55'/></svg>");
     --mist: radial-gradient(farthest-corner at 50% 45% in oklab, rgba(255, 255, 255, 0) 35%, rgba(255, 255, 255, 0.09) 100%);
-    --ground: radial-gradient(70% 38% at 100% 0% in oklab, rgba(190, 225, 120, 0.2), transparent 70%), radial-gradient(80% 45% at 0% 100% in oklab, rgba(200, 150, 100, 0.18), transparent 70%), linear-gradient(180deg in oklab, #2d3c2f 0%, #2a372c 45%, #2f3229 100%);
+    --ground: radial-gradient(75% 40% at 100% 0% in oklab, color-mix(in oklab, #d2e9ab 16%, transparent), transparent 70%), linear-gradient(180deg in oklab, #2d3d30 0%, #2a372c 45%, #263228 100%);
     color-scheme: dark;
   }
 }
 :root[data-theme='dark'] {
   --bg: #2a372c;
-  --surface-1: #334136;
+  --surface-1: #334135;
   --surface-2: #3c4b3f;
-  --surface-3: #46574a;
-  --line: rgba(232, 240, 226, 0.13);
-  --line-strong: rgba(232, 240, 226, 0.32);
-  --text: #eef2e8;
-  --text-dim: #d0d8c9;
-  --text-faint: #b8c3b2;
+  --surface-3: #475749;
+  --line: color-mix(in oklab, #eaf3eb 13%, transparent);
+  --line-strong: color-mix(in oklab, #eaf3eb 32%, transparent);
+  --text: #eaf3eb;
+  --text-dim: #cbd9cd;
+  --text-faint: #b4c4b6;
   --ok: #8fd16f;
   --ok-ink: #c3ebae;
   --ok-wash: #3b5a38;
@@ -124,7 +124,7 @@
   --mark: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='4' fill='%239cc93f'/><rect x='4' y='8' width='8' height='5' fill='%23ecf2e6'/><path d='M3 8.4 8 4l5 4.4z' fill='%231c3a6e'/><rect x='7' y='10' width='2' height='3' fill='%231c3a6e'/></svg>");
   --paper: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 0.95  0 0 0 0.04 0'/></filter><filter id='f'><feTurbulence type='fractalNoise' baseFrequency='.012 .11' numOctaves='3' seed='7' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 0.95  0 0 0 0.025 0'/></filter><filter id='s'><feTurbulence type='turbulence' baseFrequency='.9' numOctaves='1' seed='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 -9 0.5'/><feComponentTransfer><feFuncA type='discrete' tableValues='0 0 0 0 0 0 1'/></feComponentTransfer></filter><rect width='240' height='240' filter='url(%23g)'/><rect width='240' height='240' filter='url(%23f)'/><rect width='240' height='240' filter='url(%23s)' opacity='.55'/></svg>");
   --mist: radial-gradient(farthest-corner at 50% 45% in oklab, rgba(255, 255, 255, 0) 35%, rgba(255, 255, 255, 0.09) 100%);
-  --ground: radial-gradient(70% 38% at 100% 0% in oklab, rgba(190, 225, 120, 0.2), transparent 70%), radial-gradient(80% 45% at 0% 100% in oklab, rgba(200, 150, 100, 0.18), transparent 70%), linear-gradient(180deg in oklab, #2d3c2f 0%, #2a372c 45%, #2f3229 100%);
+  --ground: radial-gradient(75% 40% at 100% 0% in oklab, color-mix(in oklab, #d2e9ab 16%, transparent), transparent 70%), linear-gradient(180deg in oklab, #2d3d30 0%, #2a372c 45%, #263228 100%);
   color-scheme: dark;
 }
 
@@ -317,11 +317,12 @@ body {
 
 /* Ready state — quietly lit in the accent. */
 .pill.is-ready {
-  background: var(--ok-wash);
+  background: var(--surface-2);
 }
+/* Ready is the normal state, so it stays quiet in the palette's own colour;
+   only the icon says "ok". A missing step gets the honey wash below. */
 .pill.is-ready .pill-icon { color: var(--ok); }
-.pill.is-ready .pill-value { color: var(--ok-ink); }
-.pill.is-ready .pill-key { color: color-mix(in oklab, var(--ok) 55%, var(--text-faint)); }
+.pill.is-ready .pill-value { color: var(--text); }
 
 /* Not-ready state — amber nudge (it's a to-do, not an error). */
 .pill.is-missing {
@@ -1537,7 +1538,7 @@ body,
 }
 .preview-tabs, .segmented, .preview-stage { --block: var(--surface-2); }
 .btn-ghost, .icon-btn { --block: var(--surface-3); }
-.pill.is-ready { --block: var(--ok-wash); }
+.pill.is-ready { --block: var(--surface-2); }
 .pill.is-missing { --block: var(--warn-wash); }
 .checks { --block: var(--surface-2); }
 .checks.is-warn { --block: var(--warn-wash); }
@@ -1554,12 +1555,12 @@ summary:focus-visible,
 .text-input:focus-visible,
 .search-field:focus-within { position: relative; z-index: 1; }
 /* The ground is painted once over the whole page (no tile, so no seam where a
-   second copy would start); only the paper grain repeats. --ground is three
-   layers: two glows and a base gradient. */
+   second copy would start); only the paper grain repeats. --ground is two
+   layers in one colour: a glow of the main colour and a wash of its hue. */
 body {
   background-image: var(--paper), var(--ground);
-  background-repeat: repeat, no-repeat, no-repeat, no-repeat;
-  background-size: auto, 100% 100%, 100% 100%, 100% 100%;
+  background-repeat: repeat, no-repeat, no-repeat;
+  background-size: auto, 100% 100%, 100% 100%;
 }
 
 /* Colour blocks fade from a misty top into full colour at the bottom edge,

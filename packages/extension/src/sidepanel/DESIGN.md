@@ -13,6 +13,7 @@ Mood references: a pastel green apple with a brown stem, airbrushed green hills 
 5. **Pastel fields, dark ink.** Fills are pastel; text on them is a dark ink of the same hue. White text on saturated colour is not used.
 6. **OKLab everywhere.** Every gradient and `color-mix()` interpolates in OKLab so blends stay clean, never grey in the middle.
 7. **Colour has one job.** Status colours are fixed; main and accent come from the combination chosen in Settings.
+10. **One colour family per combination.** Ground, surfaces and ink all take the main colour's hue, so Lake is a blue paper and Peach a warm one. The ground is one colour: a glow of the main colour over a wash of its hue. The accent never paints the ground.
 8. **Plain type.** Helvetica, sentence case, no tracked capitals. Monospace only for file paths, code, and pin labels in drawings.
 9. **Soft corners.** 14 px surfaces, 10 px fields and buttons, 7 px small controls, full pills for chips and switches.
 
@@ -20,15 +21,16 @@ Mood references: a pastel green apple with a brown stem, airbrushed green hills 
 
 | Token | Role | Light (Apple) | Dark |
 |-------|------|---------------|------|
-| `--bg`, `--ground` | Ground: off-white mist with a lime glow (top right) and a warm cream glow (bottom left) | `#eef3ea` | deep field green `#1f2e24`, lime and brown glows |
-| `--surface-1/2/3` | Surface, field, secondary-action fills | `#fafcf6` / `#eff3e8` / `#e4ebdc` | `#28392d` / `#324537` / `#3c5141` |
+| `--bg`, `--ground` | Ground: off-white wash of the main hue, with a glow of the main colour top right | `#eef3e9` | deep field green `#2a372c`, soft main-colour glow |
+| `--surface-1/2/3` | Surface, field, secondary-action fills | `#fafcf6` / `#eef3e8` / `#e4ebdc` | `#334135` / `#3c4b3f` / `#475749` |
+| `--text`, `--text-dim`, `--text-faint` | Ink, tinted with the main hue | `#202717` / `#484f3f` / `#575e4f` | `#eaf3eb` / `#cbd9cd` / `#b4c4b6` |
 | `--btn-primary` (+ ink) | Main action field (palette) | apple green `#c8e4a2` / `#1f3a1c` | `#d2e9ab` / `#16261b` |
 | `--accent` (+ ink, wash) | Selection and highlight (palette) | stem brown `#8a5a3b`, wash `#f1e5d8` | tan `#d9b08c`, wash `#3f3224` |
 | `--ok` | Ready, success, verified | green `#2f8f3a`, wash `#e2f1d6` | `#8fd16f` |
 | `--warn` | Needs a look | honey `#7a5208`, wash `#f5e8cc` | `#ecc983` |
 | `--danger` | Error, always with its × mark | plum `#74345a`, wash `#f3e2ea` | `#eab0cd` |
 
-Colour combinations (`src/lib/palettes.ts`): Apple (default), Lake, Moss, Mist, Peach. Each sets main, accent, the 3D tile and the house mark for both schemes. Contrast is unit-tested: ink on main and accent ink on wash at 4.5:1 (also under the mist), accent marks at 3:1 on cards.
+Colour combinations (`src/lib/palettes.ts`): Apple (default), Lake, Moss, Mist, Peach. Each sets main, accent, the 3D tile and the house mark for both schemes. Ground, surfaces and ink are derived in OKLCH from the main colour's hue at fixed lightness and chroma levels (`neutrals()`), measured from the original Apple set; Apple dark pins its hue to keep the deep field green. The values in `styles.css` are Apple's, shown until the panel script applies the saved combination. Contrast is unit-tested for every combination: text and secondary text at 4.5:1 on the ground and every surface, ink on main and accent ink on wash at 4.5:1 (also under the mist), accent marks at 3:1 on cards. `e2e/run.cjs` checks the painted page follows each main colour in both themes.
 
 ## Primitives
 
@@ -37,7 +39,8 @@ Colour combinations (`src/lib/palettes.ts`): Apple (default), Lake, Moss, Mist, 
 | Ground | `--ground` gradients + paper, fixed | page |
 | Surface | `--surface-1`, 14 px, large bleed | result card, Settings, setup |
 | Field | `--surface-2`, 10 px, no border, small bleed. Hover one step darker. Focus: mid-accent ring + glow | text inputs, library select, search box, preview tabs track, open-mode track, drawing stage |
-| Block | role wash + `--mist` + paper, small bleed, text in role ink | Library/Relay pills, checks, status lines, notes, success list, detected-part offer |
+| Block | role wash + `--mist` + paper, small bleed, text in role ink | Library/Relay pills when something is missing, checks, status lines, notes, success list, detected-part offer |
+| Quiet block | `--surface-2` + `--mist` + paper, small bleed, green icon only | Library/Relay pills when ready (the normal state) |
 | Chip | full pill, wash fill, no border, no bleed | LCSC number, provenance, stock and price, flags |
 | Selected | accent wash fill only | active preview tab, open mode, theme, library select, match row |
 | Main action | pastel `--btn-primary` field + `--mist` + paper, small bleed in its own colour, dark ink | Install |

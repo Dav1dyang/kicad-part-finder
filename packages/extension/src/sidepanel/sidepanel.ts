@@ -187,6 +187,8 @@ let folderPermission: FolderPermission = 'none';
 let savedHandle: FileSystemDirectoryHandle | null = null;
 /** Folder name when a handle exists but needs a click to re-grant. */
 let savedFolderName = '';
+/** Set when a reconnect was declined, so the next click opens the picker instead. */
+let reconnectDeclined = false;
 let current: ConvertResult | null = null;
 /** Checks on `current`; a blocking report disables Install. */
 let currentReport: PartReport | null = null;
@@ -283,7 +285,7 @@ async function init() {
   // opens the folder picker, so there is a path that works even when Chrome
   // shows no permission prompt.
   libPill.addEventListener('click', () => void onLibraryAction('pill'));
-  chooseFolderBtn.addEventListener('click', () => void onLibraryAction('pick'));
+  chooseFolderBtn.addEventListener('click', () => void onLibraryAction(folderLapsed() ? 'pill' : 'pick'));
   chooseInTabBtn.addEventListener('click', openFinderInTab);
   // Arc's floating popup window does not show native folder dialogs, so in
   // window mode the tab route is offered up front, not only after a failure.
@@ -1409,6 +1411,7 @@ async function refreshFolderState() {
 
 /** Record a freshly granted handle and refresh everything that depends on it. */
 async function adoptFolder(handle: FileSystemDirectoryHandle) {
+  reconnectDeclined = false;
   libraryFolder = handle;
   savedHandle = handle;
   folderPermission = 'granted';
@@ -1478,7 +1481,7 @@ async function onLibraryAction(mode: 'pill' | 'pick') {
 
   // One click to re-allow the saved folder. No await may come before the
   // permission request, or the click's gesture is spent and Chrome refuses.
-  if (mode === 'pill' && folderPermission === 'prompt' && savedHandle) {
+  if (mode === 'pill' && folderLapsed() && savedHandle) {
     // If no permission bubble appears (Arc's popup window), say so instead of
     // looking dead. The request itself is still allowed to finish later.
     const silent = setTimeout(() => {
@@ -1497,6 +1500,7 @@ async function onLibraryAction(mode: 'pill' | 'pick') {
       return;
     }
     // No prompt appeared, or it was declined. Give the guaranteed path.
+    reconnectDeclined = true;
     setupPinned = true;
     refreshReadiness();
     setStatus(
@@ -1710,6 +1714,14 @@ function folderName(): string {
 function isReady(): boolean {
   return hasRelay() && hasFolder();
 }
+/**
+ * A folder was chosen before but Chrome dropped the grant: it does so whenever
+ * every Part Finder page closes, the side panel included. One click (the
+ * Library pill, or Install itself) asks for it again; no picker needed.
+ */
+function folderLapsed(): boolean {
+  return !runningInOverlay && folderPermission === 'prompt' && savedHandle !== null && !reconnectDeclined;
+}
 
 function openSetupFocusRelay() {
   setupPinned = true;
@@ -1725,10 +1737,10 @@ function refreshReadiness() {
     libPill.classList.add('is-ready');
     setText(libPillValue, folderName());
     libPill.title = `${folderName()}. Click to change.`;
-  } else if (!runningInOverlay && folderPermission === 'prompt') {
+  } else if (folderLapsed()) {
     libPill.classList.add('is-missing');
     setText(libPillValue, 'Reconnect folder');
-    libPill.title = `Click to re-allow “${savedFolderName}”.`;
+    libPill.title = `Click to re-allow “${savedFolderName}”. Pick “Allow on every visit” if Chrome offers it.`;
   } else {
     libPill.classList.add('is-missing');
     setText(libPillValue, 'Choose folder');
@@ -1751,9 +1763,12 @@ function refreshReadiness() {
   // over a result card, and never duplicated under an open Settings panel.
   const cardShowing = !partCard.classList.contains('hidden');
   const settingsOpen = !settingsPanel.classList.contains('hidden');
-  const showSetup = setupPinned || (!isReady() && !cardShowing && !settingsOpen);
+  // A lapsed folder is one click away, so it does not bring back the whole setup.
+  const needsSetup = !hasRelay() || (!hasFolder() && !folderLapsed());
+  const showSetup = setupPinned || (needsSetup && !cardShowing && !settingsOpen);
   setupView.classList.toggle('hidden', !showSetup);
   setupStepLib.classList.toggle('is-done', hasFolder());
+  setText(chooseFolderBtn, folderLapsed() ? `Reconnect “${savedFolderName}”` : 'Choose folder…');
   setupStepRelay.classList.toggle('is-done', hasRelay());
   setupDoneBtn.classList.toggle('hidden', !(setupPinned && isReady()));
 
@@ -1765,8 +1780,8 @@ function refreshReadiness() {
     setText(searchHint, 'Add your relay URL to search.');
     show(searchHint);
   } else if (!hasFolder()) {
-    setText(searchHint, folderPermission === 'prompt' && !runningInOverlay
-      ? 'Search works. Reconnect the folder to install.'
+    setText(searchHint, folderLapsed()
+      ? `Install reconnects “${savedFolderName}” first.`
       : 'Search works. Choose a folder to install.');
     show(searchHint);
   } else {
@@ -2180,6 +2195,25 @@ async function onInstall() {
     return;
   }
 
+  // The grant lapsed when the panel last closed: ask again right here. Nothing
+  // above awaits, so the request still has this click's user gesture.
+  if (!libraryFolder && folderLapsed() && savedHandle) {
+    const handle = savedHandle;
+    // A browser shortcut reaches here without a click in this page, and Chrome
+    // only asks inside one. Say what to click rather than fail silently.
+    if (navigator.userActivation && !navigator.userActivation.isActive) {
+      setStatus(installStatus, `Click Install to reconnect “${savedFolderName}”.`, 'info');
+      return;
+    }
+    if (!(await requestFolderPermission(handle))) {
+      reconnectDeclined = true;
+      refreshReadiness();
+      setStatus(installStatus, `“${savedFolderName}” was not allowed. Click Library to choose it again.`, 'error');
+      return;
+    }
+    await adoptFolder(handle);
+  }
+
   if (!libraryFolder) {
     refreshInstallEnabled();
     return;
@@ -2315,15 +2349,15 @@ function createSourceLink(link: { name: string; url: string; description: string
 function refreshInstallEnabled() {
   if (installBtn.classList.contains('is-done') || installBtn.classList.contains('is-busy')) return;
   const blocked = currentReport?.blocking === true;
-  installBtn.disabled = !(hasFolder() && current && hasRelay()) || blocked;
+  installBtn.disabled = !((hasFolder() || folderLapsed()) && current && hasRelay()) || blocked;
   installBtn.title = blocked
     ? 'Files damaged. Search again or try another source.'
     : !hasRelay()
     ? 'Add your relay URL first.'
     : hasFolder()
       ? ''
-      : folderPermission === 'prompt' && !runningInOverlay
-        ? 'Reconnect the folder first.'
+      : folderLapsed()
+        ? `Reconnects “${savedFolderName}”, then installs.`
         : 'Choose a folder first.';
 }
 

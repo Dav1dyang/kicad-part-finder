@@ -57,7 +57,7 @@ JLCPCB and EasyEDA block extensions, so a small relay you own fetches for you. F
 
 **Checks.** "LCSC verified" means LCSC made and checked the part. "Community part" means someone else uploaded it: compare it with the datasheet before ordering boards. The pin check catches pins with no matching pad, not wrong pad sizes. Damaged files cannot be installed.
 
-**Colours.** Settings › Colours offers five combinations (Apple, Lake, Moss, Mist, Peach) for the main button and highlights. Light and dark follow your system unless you pin one.
+**Colours.** Settings › Colours offers five combinations (Apple, Lake, Moss, Mist, Peach). The main colour tints the whole panel; the accent marks what is selected. Light and dark follow your system unless you pin one.
 
 **No EasyEDA data?** The card links to Ultra Librarian, SnapMagic, and Component Search Engine (free accounts, manual download).
 
@@ -86,7 +86,7 @@ Change browser shortcuts at `chrome://extensions/shortcuts`. Arc and Dia ignore 
 | Test says "not the relay" | Vercel URLs end in `/api`. |
 | "Works, but outdated" | Redeploy the relay. |
 | "JLCPCB is busy" | Wait a minute, or paste the LCSC number. |
-| Library says **Reconnect folder** | Click it once (browsers forget after a restart). |
+| Library says **Reconnect folder** | Normal after the panel closes: Chrome forgets folder access. Just click **Install**, or the Library pill. Pick **Allow on every visit** if Chrome offers it. |
 | Part missing in KiCad | Restart KiCad or reload the library. Check the path variable. |
 | Shortcut does nothing (Arc, Dia) | Click **Allow on all sites** in Settings. |
 | No folder dialog (Arc window) | Click **Choose in a tab instead**. |
