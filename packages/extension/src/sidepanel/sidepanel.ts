@@ -33,11 +33,13 @@ import type { ConvertResult } from '../lib/converter/easyeda.js';
 import type { JlcMatch } from '../lib/jlcpcb.js';
 import { LIBRARY_CHOICES, categoryToBucket, type LibraryChoice } from '../lib/autosort.js';
 import {
+  commitReminder,
   DEFAULT_LIBRARY_CONFIG,
   detectPrefix,
   libraryNickname,
   libraryTableRows,
   normalizeLibraryConfig,
+  setupHint,
   validatePathVar,
   validatePrefix,
   type LibraryConfig,
@@ -48,6 +50,7 @@ import {
   pickLibraryFolder,
   requestFolderPermission,
   installPart,
+  type FolderContents,
   type FolderPermission,
   type InstallPartResult,
 } from '../lib/library-writer.js';
@@ -126,6 +129,7 @@ const setupDoneBtn = $<HTMLButtonElement>('setupDoneBtn');
 const libPrefixInput = $<HTMLInputElement>('libPrefixInput');
 const libPathVarInput = $<HTMLInputElement>('libPathVarInput');
 const libConfigNote = $('libConfigNote');
+const libSetupHint = $('libSetupHint');
 const copySymRowsBtn = $<HTMLButtonElement>('copySymRowsBtn');
 const copyFpRowsBtn = $<HTMLButtonElement>('copyFpRowsBtn');
 
@@ -174,6 +178,7 @@ const successPanel = $('successPanel');
 const writtenList = $<HTMLUListElement>('writtenList');
 const restartNote = $('restartNote');
 const reloadNote = $('reloadNote');
+const commitNote = $('commitNote');
 const installAnotherBtn = $<HTMLButtonElement>('installAnotherBtn');
 const closeHelperBtn = $<HTMLButtonElement>('closeHelperBtn');
 
@@ -183,6 +188,8 @@ const sourceLinks = $('sourceLinks');
 // --- State -------------------------------------------------------------------
 let libraryFolder: FileSystemDirectoryHandle | null = null;
 let folderPermission: FolderPermission = 'none';
+/** What the granted folder holds (setup script, git), for the setup hint and commit reminder. */
+let folderContents: FolderContents | null = null;
 /** The saved handle even when its grant lapsed, so a click can re-request it directly. */
 let savedHandle: FileSystemDirectoryHandle | null = null;
 /** Folder name when a handle exists but needs a click to re-grant. */
@@ -1407,6 +1414,21 @@ async function refreshFolderState() {
     savedHandle = null;
     libraryFolder = null;
   }
+  void refreshFolderContents();
+}
+
+/** Re-read the granted folder for the setup hint. Without a grant, fall back to the generic hint. */
+async function refreshFolderContents() {
+  const folder = libraryFolder;
+  const contents = folder ? await inspectLibraryFolder(folder) : null;
+  if (folder !== libraryFolder) return; // the folder changed while we looked
+  folderContents = contents;
+  renderSetupHint();
+}
+
+function renderSetupHint() {
+  const folder = libraryFolder && folderContents ? { name: libraryFolder.name, ...folderContents } : null;
+  setText(libSetupHint, setupHint(libraryConfig, folder));
 }
 
 /** Record a freshly granted handle and refresh everything that depends on it. */
@@ -1559,6 +1581,7 @@ function applyLibraryConfig() {
   if (document.activeElement !== libPathVarInput) libPathVarInput.value = libraryConfig.pathVar;
   for (const opt of bucketSelect.options) opt.textContent = bucketLabel(opt.value);
   updateDestPath();
+  renderSetupHint();
   if (!libConfigNote.classList.contains('is-error')) {
     setNote(libConfigNote, `Libraries: ${bucketLabel('IC')}, ${bucketLabel('Power')}, … Models: \${${libraryConfig.pathVar}}/3dmodels`, '');
   }
@@ -1609,6 +1632,10 @@ async function copyTableRows(kind: 'symbols' | 'footprints') {
  */
 async function checkFolderLooksRight(handle: FileSystemDirectoryHandle) {
   const contents = await inspectLibraryFolder(handle);
+  if (handle === libraryFolder) {
+    folderContents = contents;
+    renderSetupHint();
+  }
   const found = detectPrefix(contents.symbolFiles);
   if (found && found !== libraryConfig.prefix) {
     setStatus(
@@ -2256,6 +2283,12 @@ async function onInstall() {
   successPanel.classList.toggle('is-partial', !res.ok);
   restartNote.classList.toggle('hidden', !(res.ok && res.libraryCreated));
   reloadNote.classList.toggle('hidden', !(res.ok && !res.libraryCreated));
+  // Installs into a git repo are easy to forget to commit; say so while it is fresh.
+  folderContents = await inspectLibraryFolder(libraryFolder);
+  const reminder = res.written.length ? commitReminder({ name: libraryFolder.name, ...folderContents }) : '';
+  setText(commitNote, reminder);
+  commitNote.classList.toggle('hidden', !reminder);
+  renderSetupHint();
 
   if (res.ok) {
     setInstallButton('done', `Installed ${truncate(partName, 22)} → ${lib}`);

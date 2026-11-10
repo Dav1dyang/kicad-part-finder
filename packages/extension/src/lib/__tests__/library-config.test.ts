@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  commitReminder,
   DEFAULT_LIBRARY_CONFIG,
+  fragmentMismatches,
+  parseTableRows,
+  setupHint,
   detectPrefix,
   libraryNickname,
   libraryTableRows,
@@ -57,5 +61,62 @@ describe('detectPrefix', () => {
   it('picks the most common prefix and ignores unrelated files', () => {
     expect(detectPrefix(['A_IC.kicad_sym', 'B_IC.kicad_sym', 'B_Light.kicad_sym', 'notes.kicad_sym'])).toBe('B');
     expect(detectPrefix(['Random.kicad_sym'])).toBeNull();
+  });
+});
+
+describe('setup hint', () => {
+  const cfg = DEFAULT_LIBRARY_CONFIG;
+  const matching = libraryTableRows(cfg).symbols;
+  const folder = (over = {}) => ({ name: 'kicad-libraries', hasSetupScript: true, symTableFragment: matching, ...over });
+
+  it('reads nickname and uri from table rows', () => {
+    const rows = parseTableRows(matching);
+    expect(rows.get('DavidLib_IC')).toBe('${DAVID_KICAD_LIB}/symbols/DavidLib_IC.kicad_sym');
+    expect(rows.get('KiCadPartFinder')).toBe('${DAVID_KICAD_LIB}/symbols/KiCadPartFinder.kicad_sym');
+  });
+
+  it('finds no mismatch when the fragment registers the same rows, or there is none', () => {
+    expect(fragmentMismatches(matching, cfg)).toEqual([]);
+    expect(fragmentMismatches('', cfg)).toEqual([]);
+  });
+
+  it('lists libraries the fragment registers differently or not at all', () => {
+    const lab = { prefix: 'Lab', pathVar: 'DAVID_KICAD_LIB' };
+    const off = fragmentMismatches(matching, lab);
+    expect(off).toContain('Lab_IC');
+    expect(off).not.toContain('KiCadPartFinder');
+    const otherVar = { prefix: 'DavidLib', pathVar: 'LAB_KICAD' };
+    expect(fragmentMismatches(matching, otherVar)).toContain('KiCadPartFinder');
+  });
+
+  it('names the variable and the folder it must point at', () => {
+    expect(setupHint(cfg, null)).toMatch(/set DAVID_KICAD_LIB to your library folder/);
+    expect(setupHint(cfg, folder({ hasSetupScript: false }))).toMatch(/set DAVID_KICAD_LIB to “kicad-libraries”/);
+    expect(setupHint(cfg, null)).toMatch(/before the last \)/);
+  });
+
+  it('points at tools/setup when the folder has one that matches', () => {
+    const hint = setupHint(cfg, folder());
+    expect(hint).toMatch(/run \.\/tools\/setup/);
+    expect(hint).not.toMatch(/different libraries/);
+  });
+
+  it('warns when the folder setup script registers other names', () => {
+    const hint = setupHint({ prefix: 'Lab', pathVar: 'DAVID_KICAD_LIB' }, folder());
+    expect(hint).toMatch(/different libraries than these settings \(Lab_Power, Lab_Connector, …\)/);
+    expect(hint).toMatch(/Configure Paths/);
+  });
+});
+
+describe('commit reminder', () => {
+  it('says nothing outside a git repo', () => {
+    expect(commitReminder(null)).toBe('');
+    expect(commitReminder({ name: 'lib', isGitRepo: false, hasCatalogScript: true })).toBe('');
+  });
+  it('asks for a commit, and a catalog refresh when the folder has the script', () => {
+    expect(commitReminder({ name: 'lib', isGitRepo: true, hasCatalogScript: false })).toBe('Commit the new files in “lib” so they are saved in git.');
+    expect(commitReminder({ name: 'kicad-libraries', isGitRepo: true, hasCatalogScript: true })).toBe(
+      'Run ./tools/catalog, then commit the new files in “kicad-libraries”.',
+    );
   });
 });
